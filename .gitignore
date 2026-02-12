@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# VSCode / PyCharm
+.idea/
+.vscode/
+
+# Excel output
+*.xlsx
+
+# OS files
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+
+# coverage
+.coverage
+htmlcov/
+
+# Docker volumes
+*.db

@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: charlottesville_db
+    environment:
+      POSTGRES_USER: events
+      POSTGRES_PASSWORD: events
+      POSTGRES_DB: events
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
