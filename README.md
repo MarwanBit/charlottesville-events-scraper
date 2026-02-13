@@ -118,43 +118,6 @@ fixtures/
 docker-compose.yml
 README.md
 
----
-
-## 🐳 Database Setup (Docker)
-
-Start PostgreSQL:
-
-```bash
-docker compose up -d
-Database credentials:
-POSTGRES_DB=events
-POSTGRES_USER=events
-POSTGRES_PASSWORD=events
-▶️ Run Scraper
-source .venv/bin/activate
-PYTHONPATH=src python -m app.cli
-📊 Run Dashboard
-PYTHONPATH=src streamlit run src/app/dashboard.py
-🧪 Run Tests
-PYTHONPATH=src pytest
-🗄 Reset Database
-docker exec -it charlottesville_db \
-psql -U events -d events \
--c "TRUNCATE processed_urls, event_records RESTART IDENTITY CASCADE;"
-🔎 Design Decisions
-Separation of scraping, transformation, and persistence layers
-Idempotent scraping using processed URL tracking
-Database upsert logic to avoid duplicates
-Fixture-based parser testing for stability
-Early stop detection based on repeated pagination
-Explicit pipeline orchestration for maintainability
-📈 Future Improvements
-Add retry logic with exponential backoff
-Add structured logging
-Add CI pipeline (GitHub Actions)
-Add Dockerized scraper service
-Add API endpoint for data access
-Improve categorization using NLP
-Author
+Author 
 Abra Pourseif
 
