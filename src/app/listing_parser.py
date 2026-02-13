@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from app.utils import clean_text
-from app.config import BASE_URL
+from utils import clean_text
+from config import BASE_URL
 
 def parse_listing_cards(html: str):
     soup = BeautifulSoup(html, "html.parser")

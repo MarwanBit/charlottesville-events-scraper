@@ -7,7 +7,7 @@ from openpyxl.utils import get_column_letter
 import re
 import json
 from sqlalchemy.orm import sessionmaker
-from app.models import engine, ProcessedURL, EventRecord
+from models import engine, ProcessedURL, EventRecord
 
 BASE_URL = "https://www.visitcharlottesville.org/events/"
 HEADERS = {"User-Agent": "Mozilla/5.0"}

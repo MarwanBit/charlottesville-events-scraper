@@ -1,10 +1,12 @@
+from sqlalchemy.orm.session import Session
+
 from sqlalchemy.orm import sessionmaker
-from app.models import engine, ProcessedURL, EventRecord
-from app.constants import DB_FIELDS
+from .models import engine, ProcessedURL, EventRecord
+from .constants import DB_FIELDS
 
 class Repository:
     def __init__(self):
-        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        SessionLocal = sessionmaker[Session](bind=engine, autoflush=False, autocommit=False)
         self.db = SessionLocal()
 
     def close(self):
@@ -26,6 +28,13 @@ class Repository:
                 setattr(existing, k, v)
         else:
             self.db.add(EventRecord(**db_event))
+
+    def get_event_by_link(self, event_link: str) -> dict | None:
+        """Return an existing event as a dict keyed by DB_FIELDS, or None if not found."""
+        row = self.db.query(EventRecord).filter_by(event_link=event_link).first()
+        if not row:
+            return None
+        return {f: getattr(row, f) for f in DB_FIELDS}
 
     def commit(self):
         self.db.commit()

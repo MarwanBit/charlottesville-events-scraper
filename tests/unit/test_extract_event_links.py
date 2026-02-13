@@ -1,5 +1,5 @@
 from pathlib import Path
-from app.parsers import extract_event_links
+from src.app.parsers import extract_event_links
 
 def test_extract_event_links_from_fixture():
     fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "events_listing.html"

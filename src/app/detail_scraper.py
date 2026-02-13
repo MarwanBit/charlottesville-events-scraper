@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
-from app.utils import clean_text
+from src.app.utils import clean_text
 
 
 def get_image_url(soup: BeautifulSoup, base_url):

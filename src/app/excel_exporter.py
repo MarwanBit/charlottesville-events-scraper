@@ -1,7 +1,7 @@
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from app.utils import val
-from app.config import MISSING
+from utils import val
+from config import MISSING
 
 
 def export_to_excel(events, filename):

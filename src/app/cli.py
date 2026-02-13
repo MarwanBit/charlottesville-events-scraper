@@ -1,5 +1,5 @@
-from app.client import create_session
-from app.pipeline import run_pipeline
+from client import create_session
+from pipeline import run_pipeline
 
 def main():
     session = create_session()

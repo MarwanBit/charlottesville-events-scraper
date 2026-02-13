@@ -1,4 +1,4 @@
-from app.main import clean_text
+from src.app.main import clean_text
 
 def test_clean_text_none():
     assert clean_text(None) == ""

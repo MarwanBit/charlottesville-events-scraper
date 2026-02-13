@@ -31,3 +31,7 @@ LOCATION_TYPE_RULES = [
     ("Hotel", ["hotel", "inn"]),
     ("Community Center", ["community center", "center", "library"]),
 ]
+
+INITIAL_URLS = [
+    'https://www.visitcharlottesville.org/events/'
+]

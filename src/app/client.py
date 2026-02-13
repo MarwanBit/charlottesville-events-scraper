@@ -1,6 +1,5 @@
 import requests
-from app.config import HEADERS
-
+from config import HEADERS
 
 def create_session() -> requests.Session:
     s = requests.Session()

@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup
-from app.config import BASE_URL, MAX_PAGES
+from config import BASE_URL, MAX_PAGES
 
 def iter_listing_pages(session):
     page = 1

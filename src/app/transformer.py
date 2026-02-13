@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from app.constants import EVENT_TYPE_RULES, LOCATION_TYPE_RULES
+from .constants import EVENT_TYPE_RULES, LOCATION_TYPE_RULES
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:

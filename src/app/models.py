@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, Integer, Text, DateTime
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
 from sqlalchemy.sql import func
+from enum import Enum
 
 DATABASE_URL = "postgresql+psycopg://events:events@127.0.0.1:5432/events"
 
@@ -8,7 +9,10 @@ engine = create_engine(DATABASE_URL)
 
 Base = declarative_base()
 
-
+class ProcessedURLStatus(str, Enum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 # ------------------------
 # Processed URLs table
 # ------------------------
@@ -17,6 +21,7 @@ class ProcessedURL(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     url: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(Text, default=ProcessedURLStatus.PENDING.value, nullable=False)
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
