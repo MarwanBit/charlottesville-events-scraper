@@ -1,77 +1,68 @@
-from datetime import datetime, timezone
-from listing_parser import parse_listing_cards, extract_event_from_card
-from detail_scraper import scrape_event_detail
-from transformer import categorize_event, add_date_time_features
-from repository import Repository
-from excel_exporter import export_to_excel
-from crawler import iter_listing_pages
-from config import EXCEL_OUTPUT
+from abc import ABC, abstractmethod
 
-def run_pipeline(session):
-    repo = Repository()
-    all_events = []
-    total_new = 0
+from .dumper import PostgreSQLDumper
+from .url_queue import PostgreSQLURLQueue
+from .url_resolver import URLResolver
+from .http_client import HTTPClient
+from .repository import Repository
+from .transformer import Transformer
+import time
 
-    try:
-        for page, html, cards_count in iter_listing_pages(session):
-            _, cards = parse_listing_cards(html)
-            new_count = 0
+repository = Repository()
 
-            for card in cards:
-                base = extract_event_from_card(card)
-                event_link = base.get("event_link", "")
-                title = base.get("title", "")
+class BasePipeline(ABC):
 
-                if not title or not event_link:
-                    continue
+    def __init__(self, client, queue, url_resolver, transformer, dumper):
+        self.client = client
+        self.queue = queue
+        self.url_resolver = url_resolver
+        self.transformer = transformer
+        self.dumper = dumper
 
-                if repo.is_processed(event_link):
-                    continue
+    @abstractmethod
+    def run(self):
+        pass
 
-                event = {
-                    **base,
-                    "scraped_at": datetime.now(timezone.utc).isoformat(),
-                }
+# Here's what I want to do with the new pipeline
+class PostgreSQLPipeline(BasePipeline):
 
-                try:
-                    details = scrape_event_detail(session, event_link)
-                    event.update(details)
+    def __init__(self):
+        self.queue = PostgreSQLURLQueue()
+        self.client = HTTPClient()
+        self.url_resolver = URLResolver()
+        self.dumper = PostgreSQLDumper()
+        self.transformer = Transformer()
 
-                    event.update(categorize_event(
-                        title=event.get("title", ""),
-                        description=event.get("description", ""),
-                        address=event.get("address", ""),
-                        organizer=event.get("organizer", ""),
-                    ))
+    def run(self):
+        self.queue.init_queue()
+        while not self.queue.empty():
+            url = self.queue.pop()
+            print(url)
+            time.sleep(1)
+            website = self.url_resolver.resolve(url)
 
-                    event.update(add_date_time_features(
-                        start_date=event.get("start_date", ""),
-                        start_time=event.get("start_time", ""),
-                    ))
+            # add external links/new sites to visit
+            for external_site in website.extract_links(self.client):
+                self.queue.enqueue(external_site)
+            # now we need to extract the links from it
+            events = website.get_events(self.client)
+            print(events)
+            # dump the information to the DB, then transform it and reinsert it
+            self.dumper.dump_events(events)
+            # extract information from the DB
+            for event in events:
+                event_link = event["event_link"]
+                existing = repository.get_event_by_link(event_link)
+                merged =  {**(existing or {}), **event}
+                transformed_event = self.transformer.transform_event(merged)
+                self.dumper.upsert_event(transformed_event)
+            self.dumper.commit()
 
-                    all_events.append(event)
-                    repo.upsert_event(event)
-                    repo.mark_processed(event_link)
-                    repo.commit()
+            # now we mark them as visited
+            self.queue.mark_complete(website.url)
+            print(website)
 
-                    new_count += 1
-                    total_new += 1
 
-                    print(f"\n📄 Scraping LISTING page {page} ...")
-                    print(f"  ▶ Event: {title}")
-
-                except Exception as e:
-                    repo.rollback()
-                    print("Detail scrape failed:", event_link, e)
-
-            # optional log
-            if cards_count:
-                print(f"Page {page}: cards={cards_count}, new={new_count}")
-
-        export_to_excel(all_events, EXCEL_OUTPUT)
-        print("\nDone ✅")
-        print(f"Excel saved ✅ {EXCEL_OUTPUT}")
-        return total_new
-
-    finally:
-        repo.close()
+if __name__ == "__main__":
+    pipeline = PostgreSQLPipeline()
+    pipeline.run()

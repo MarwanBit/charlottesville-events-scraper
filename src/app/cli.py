@@ -1,9 +1,8 @@
-from client import create_session
-from pipeline import run_pipeline
+from .pipeline import PostgreSQLPipeline
 
 def main():
-    session = create_session()
-    run_pipeline(session)
+    pipeline = PostgreSQLPipeline()
+    pipeline.run()
 
 if __name__ == "__main__":
     main()
