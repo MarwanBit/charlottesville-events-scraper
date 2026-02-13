@@ -158,14 +158,3 @@ Improve categorization using NLP
 Author
 Abra Pourseif
 
----
-
-# Optional: Want It To Look Even More Professional?
-
-We can also:
-
-- Add a small architecture diagram (ASCII or Mermaid)
-- Add badges (Python version, tests passing, Dockerized)
-- Add “Why This Project Exists”
-- Add performance metrics
-
