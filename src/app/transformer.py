@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from .constants import EVENT_TYPE_RULES, LOCATION_TYPE_RULES
-from datetime import datetime
+from datetime import datetime, date, time
 import re
 
 class BaseTransformer(ABC):
@@ -46,23 +46,32 @@ class Transformer(BaseTransformer):
 
         try:
             if start_date:
-                d = datetime.strptime(start_date, "%Y-%m-%d")
+                if isinstance(start_date, (date, datetime)):
+                    d = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+                else:
+                    d = datetime.strptime(str(start_date), "%Y-%m-%d")
                 day_of_week = d.strftime("%A")
                 is_weekend = "TRUE" if day_of_week in ("Saturday", "Sunday") else "FALSE"
         except Exception:
             pass
 
         try:
-            if start_time and re.match(r"^\d{2}:\d{2}$", start_time):
-                hour = int(start_time.split(":")[0])
-                if 5 <= hour < 12:
-                    time_of_day = "Morning"
-                elif 12 <= hour < 17:
-                    time_of_day = "Afternoon"
-                elif 17 <= hour < 21:
-                    time_of_day = "Evening"
+            if start_time:
+                if isinstance(start_time, (time, datetime)):
+                    hour = start_time.hour
+                elif isinstance(start_time, str) and re.match(r"^\d{2}:\d{2}", start_time):
+                    hour = int(start_time.split(":")[0])
                 else:
-                    time_of_day = "Night"
+                    hour = None
+                if hour is not None:
+                    if 5 <= hour < 12:
+                        time_of_day = "Morning"
+                    elif 12 <= hour < 17:
+                        time_of_day = "Afternoon"
+                    elif 17 <= hour < 21:
+                        time_of_day = "Evening"
+                    else:
+                        time_of_day = "Night"
         except Exception:
             pass
 

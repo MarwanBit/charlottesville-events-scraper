@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from .dumper import PostgreSQLDumper
 from .url_queue import PostgreSQLURLQueue
 from .url_resolver import URLResolver
-from .http_client import HTTPClient
+from .http_client import HTTPClient, HybridClient
 from .repository import Repository
 from .transformer import Transformer
 import time
@@ -28,7 +28,7 @@ class PostgreSQLPipeline(BasePipeline):
 
     def __init__(self):
         self.queue = PostgreSQLURLQueue()
-        self.client = HTTPClient()
+        self.client = HybridClient()
         self.url_resolver = URLResolver()
         self.dumper = PostgreSQLDumper()
         self.transformer = Transformer()
