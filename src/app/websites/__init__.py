@@ -4,6 +4,7 @@ from . import washington
 from . import explore_georgia
 from . import visit_ma
 from . import enjoy_illinois
+from . import texas_time_travel
 
 from .discover_durham import DiscoverDurhamWebsite
 from .visit_charlottesville import VisitCharlottesvilleWebsite, VisitCharlottesvilleEventWebsite
@@ -12,3 +13,4 @@ from .washington import WashingtonWebsite, WashingtonEventWebsite, extract_datet
 from .explore_georgia import ExploreGeorgiaWebsite, ExploreGeorgiaEventWebsite
 from .visit_ma import VisitMAWebsite, VisitMAEventWebsite
 from .enjoy_illinois import EnjoyIllinoisWebsite, EnjoyIllinoisEventWebsite
+from .texas_time_travel import TexasTimeTravelWebsite, TexasTimeTravelEventWebsite

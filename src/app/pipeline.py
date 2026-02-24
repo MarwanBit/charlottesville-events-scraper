@@ -10,6 +10,32 @@ import time
 
 repository = Repository()
 
+
+def _dedupe_events_by_link(events: list[dict]) -> list[dict]:
+    """Merge duplicate events that share the same event_link (e.g. recurring listings).
+    Keeps one record per event_link with the earliest start_date and latest end_date."""
+    by_link: dict[str, list[dict]] = {}
+    for e in events:
+        link = e.get("event_link") or ""
+        by_link.setdefault(link, []).append(e)
+    out = []
+    for link, group in by_link.items():
+        if not group:
+            continue
+        base = dict(group[0])
+        if len(group) == 1:
+            out.append(base)
+            continue
+        start_dates = [e.get("start_date") for e in group if e.get("start_date")]
+        end_dates = [e.get("end_date") for e in group if e.get("end_date")]
+        if start_dates:
+            base["start_date"] = min(start_dates)
+        if end_dates:
+            base["end_date"] = max(end_dates)
+        out.append(base)
+    return out
+
+
 class BasePipeline(ABC):
 
     def __init__(self, client, queue, url_resolver, transformer, dumper):
@@ -46,6 +72,7 @@ class PostgreSQLPipeline(BasePipeline):
                 self.queue.enqueue(external_site)
             # now we need to extract the links from it
             events = website.get_events(self.client)
+            events = _dedupe_events_by_link(events)
             print(events)
             # dump the information to the DB, then transform it and reinsert it
             self.dumper.dump_events(events)

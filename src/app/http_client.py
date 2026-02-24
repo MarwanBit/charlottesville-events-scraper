@@ -460,8 +460,10 @@ class HybridClient(BaseClient):
             r.url = url
             r._content = b"browser unavailable (failed to start in this environment)"
             return r
-        # Use browser directly for hosts we've already seen 403 from
-        if host in self._use_browser_hosts:
+        # Use browser when caller asked for wait_for_selector (JS-rendered content) or host already known to need browser
+        if wait_for_selector is not None or host in self._use_browser_hosts:
+            if wait_for_selector is not None and host not in self._use_browser_hosts:
+                self._use_browser_hosts.add(host)
             return self._browser_get_or_503(
                 url, host, browser_timeout,
                 wait_for_selector=wait_for_selector,

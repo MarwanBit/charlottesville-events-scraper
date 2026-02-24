@@ -36,5 +36,7 @@ INITIAL_URLS = [
     'https://www.visitcharlottesville.org/events/',
     'https://washington.org/find-dc-listings/events',
     'https://www.visitma.com/events',
-    'https://exploregeorgia.org/calendar-of-events'
+    'https://exploregeorgia.org/calendar-of-events',
+    'https://www.enjoyillinois.com/things-to-do/festivals-and-events/',
+    'https://texastimetravel.com/events/',
 ]

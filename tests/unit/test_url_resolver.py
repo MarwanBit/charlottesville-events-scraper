@@ -6,7 +6,8 @@ from src.app.websites import DiscoverDurhamWebsite
 from src.app.websites import VisitCharlottesvilleEventWebsite
 from src.app.websites import VisitMAWebsite, VisitMAEventWebsite
 from src.app.websites import ExploreGeorgiaWebsite, ExploreGeorgiaEventWebsite
-from src.app.websites import EnjoyIllinoisWebsite
+from src.app.websites import EnjoyIllinoisWebsite, EnjoyIllinoisEventWebsite
+from src.app.websites import TexasTimeTravelWebsite, TexasTimeTravelEventWebsite
 
 from src.app.url_resolver import UnknownWebsiteError
 
@@ -146,6 +147,50 @@ def test_enjoy_illinois(resolver, visit_ma_client):
     pprint.pprint(links)
     assert len(links) >= 13, f"expected >= 13 links, got {len(links)}"
 
+def test_enjoy_illinois_events(resolver, visit_ma_client):
+    client = visit_ma_client
+    event1_url = 'https://www.enjoyillinois.com/things-to-do/festivals-and-events'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, EnjoyIllinoisWebsite)
+    assert str(website_1) == f"EnjoyIllinoisWebsite w/ URL: {event1_url}"
+    events = website_1.get_events(client)
+    pprint.pprint(events)
+
+def test_enjoy_illinois_events_page(resolver, visit_ma_client):
+    client = visit_ma_client
+    event1_url = 'https://www.enjoyillinois.com/things-to-do/festivals-and-events/listing/northwestern-university-mens-and-womens-big-ten-basketball/'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, EnjoyIllinoisEventWebsite)
+    assert str(website_1) == f"EnjoyIllinoisEventWebsite w/ URL: {event1_url}"
+    events = website_1.get_events(client)
+    pprint.pprint(events)
+
+def test_texas_time_travel(resolver, client):
+    """Uses HTTP client only; Texas Time Travel does not require a browser."""
+    event1_url = 'https://texastimetravel.com/events'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, TexasTimeTravelWebsite)
+    assert str(website_1) == f"TexasTimeTravelWebsite w/ URL: {event1_url}"
+    links = website_1.extract_links(client)
+    pprint.pprint(links)
+
+def test_texas_time_travel_events(resolver, client):
+    """Uses HTTP client only; Texas Time Travel does not require a browser."""
+    event1_url = 'https://texastimetravel.com/events'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, TexasTimeTravelWebsite)
+    assert str(website_1) == f"TexasTimeTravelWebsite w/ URL: {event1_url}"
+    events = website_1.get_events(client)
+    pprint.pprint(events)
+
+def test_texas_time_travel_events_page(resolver, client):
+    """Uses HTTP client only; Texas Time Travel does not require a browser."""
+    event1_url = 'https://texastimetravel.com/events/cliff-cavin-journeys-of-a-lifetime/'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, TexasTimeTravelEventWebsite)
+    assert str(website_1) == f"TexasTimeTravelEventWebsite w/ URL: {event1_url}"
+    events = website_1.get_events(client)
+    pprint.pprint(events)
 
 def test_matching_error(resolver):
     with pytest.raises(UnknownWebsiteError):
