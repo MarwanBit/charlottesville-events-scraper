@@ -1,16 +1,31 @@
 from sqlalchemy.orm.session import Session
 
-from sqlalchemy.orm import sessionmaker
-from .models import engine, ProcessedURL, EventRecord
+from .models import ProcessedURL, EventRecord
 from .constants import DB_FIELDS
 
+
+def _normalize_date_for_key(start_date):
+    """Return a YYYY-MM-DD string for DB lookup; accept date, datetime, or str."""
+    if start_date is None:
+        return None
+    if hasattr(start_date, "date"):  # datetime
+        return start_date.date().isoformat()
+    if hasattr(start_date, "isoformat"):  # date
+        return start_date.isoformat()
+    return str(start_date)
+
 class Repository:
-    def __init__(self):
-        SessionLocal = sessionmaker[Session](bind=engine, autoflush=False, autocommit=False)
-        self.db = SessionLocal()
+    """Requires session= from session_scope() or get_session()."""
+
+    def __init__(self, session: Session):
+        if session is None:
+            raise TypeError("Repository requires session= (e.g. from session_scope()).")
+        self.db = session
+        self._own_session = False
 
     def close(self):
-        self.db.close()
+        if self._own_session:
+            self.db.close()
 
     def is_processed(self, url: str) -> bool:
         return self.db.query(ProcessedURL).filter_by(url=url).first() is not None
@@ -20,9 +35,15 @@ class Repository:
 
     def upsert_event(self, event: dict):
         event_link = event["event_link"]
+        start_date_key = _normalize_date_for_key(event.get("start_date"))
         db_event = {k: v for k, v in event.items() if k in DB_FIELDS}
+        # Normalize start_date in db_event for the unique constraint
+        if db_event.get("start_date") is not None and hasattr(db_event["start_date"], "isoformat"):
+            db_event["start_date"] = db_event["start_date"].isoformat()
 
-        existing = self.db.query(EventRecord).filter_by(event_link=event_link).first()
+        existing = self.db.query(EventRecord).filter_by(
+            event_link=event_link, start_date=start_date_key
+        ).first()
         if existing:
             for k, v in db_event.items():
                 setattr(existing, k, v)
@@ -32,6 +53,14 @@ class Repository:
     def get_event_by_link(self, event_link: str) -> dict | None:
         """Return an existing event as a dict keyed by DB_FIELDS, or None if not found."""
         row = self.db.query(EventRecord).filter_by(event_link=event_link).first()
+        if not row:
+            return None
+        return {f: getattr(row, f) for f in DB_FIELDS}
+
+    def get_event_by_link_and_date(self, event_link: str, start_date) -> dict | None:
+        """Return an existing event for this link and start_date, or None. start_date can be date or str."""
+        key = _normalize_date_for_key(start_date)
+        row = self.db.query(EventRecord).filter_by(event_link=event_link, start_date=key).first()
         if not row:
             return None
         return {f: getattr(row, f) for f in DB_FIELDS}

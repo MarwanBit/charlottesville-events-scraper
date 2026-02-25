@@ -490,6 +490,17 @@ class HybridClient(BaseClient):
                 wait_for_selector=wait_for_selector,
                 wait_for_timeout=wait_for_timeout,
             )
+        # Cloudflare challenge returns 200 with "Just a moment..." / "Enable JavaScript and cookies"
+        if response.status_code == 200:
+            text = (response.text or "").lower()
+            if "just a moment" in text or "enable javascript and cookies to continue" in text:
+                logger.info("HybridClient: Cloudflare challenge for %s, escalating to NoDriverClient", url)
+                self._use_browser_hosts.add(host)
+                return self._browser_get_or_503(
+                    url, host, browser_timeout,
+                    wait_for_selector=wait_for_selector,
+                    wait_for_timeout=wait_for_timeout,
+                )
         return response
 
     def close(self) -> None:

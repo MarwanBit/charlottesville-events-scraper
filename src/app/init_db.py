@@ -1,5 +1,8 @@
 from models import Base, engine
 
-
-Base.metadata.create_all(bind=engine)
-print("Tables created")
+# Create tables; always dispose engine so connection is released
+try:
+    Base.metadata.create_all(bind=engine)
+    print("Tables created")
+finally:
+    engine.dispose()

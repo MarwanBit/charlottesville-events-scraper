@@ -4,8 +4,6 @@ import requests
 from bs4 import Tag, BeautifulSoup
 from datetime import datetime, timezone
 from ..utils import clean_text
-import dateparser
-
 import re
 
 def extract_datetime_range(text, reference_date=None):
@@ -20,6 +18,8 @@ def extract_datetime_range(text, reference_date=None):
     if reference_date is None:
         reference_date = datetime.now()
     ref_date = reference_date.date() if hasattr(reference_date, 'date') else reference_date
+
+    import dateparser  # Lazy import: dateparser/regex are slow to load
 
     # Step 1: Separate date part from time part. Time part is at the end and looks like "8 p.m." or "6 p.m. to 7 p.m."
     # When there's no numeric time (e.g. "Jul 11, 2026. Evening" or "Jun 26, 2026. TBA"), split on last ". " and parse the date part only.

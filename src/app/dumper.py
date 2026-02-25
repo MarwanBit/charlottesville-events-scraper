@@ -1,14 +1,15 @@
 from abc import ABC, abstractmethod
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
 from .utils import val
 from .config import MISSING
+from .constants import DB_FIELDS
+from .repository import _normalize_date_for_key
 
 from sqlalchemy.orm.session import Session
-from sqlalchemy.orm import sessionmaker
-from .models import engine, ProcessedURL, EventRecord
-from .constants import DB_FIELDS
+
+from .models import ProcessedURL, EventRecord
+
+
 
 class BaseDumper(ABC):
 
@@ -19,6 +20,9 @@ class BaseDumper(ABC):
 class ExcelDumper(BaseDumper):
 
     def __init__(self, filename: str, ws_title = "Events"):
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+        self._get_column_letter = get_column_letter
         self.filename = filename
         # setup excel workbook
         self.wb = Workbook()
@@ -61,7 +65,7 @@ class ExcelDumper(BaseDumper):
         # Auto-size column widths to fit content (max width 60).
         for col in range(1, len(self.headers) + 1):
             max_len = 0
-            col_letter = get_column_letter(col)
+            col_letter = self._get_column_letter(col)
             for cell in self.ws[col_letter]:
                 if cell.value is not None:
                     max_len = max(max_len, len(str(cell.value)))
@@ -69,13 +73,17 @@ class ExcelDumper(BaseDumper):
         self.wb.save(self.filename)
 
 class PostgreSQLDumper(BaseDumper):
+    """Requires session= from session_scope() or get_session()."""
 
-    def __init__(self):
-        SessionLocal = sessionmaker[Session](bind=engine, autoflush=False, autocommit=False)
-        self.db = SessionLocal()
+    def __init__(self, session: Session):
+        if session is None:
+            raise TypeError("PostgreSQLDumper requires session= (e.g. from session_scope()).")
+        self.db = session
+        self._own_session = False
 
     def close(self):
-        self.db.close()
+        if self._own_session:
+            self.db.close()
 
     def is_processed(self, url: str) -> bool:
         return self.db.query(ProcessedURL).filter_by(url=url).first() is not None
@@ -85,9 +93,14 @@ class PostgreSQLDumper(BaseDumper):
 
     def upsert_event(self, event: dict):
         event_link = event["event_link"]
+        start_date_key = _normalize_date_for_key(event.get("start_date"))
         db_event = {k: v for k, v in event.items() if k in DB_FIELDS}
+        if db_event.get("start_date") is not None and hasattr(db_event["start_date"], "isoformat"):
+            db_event["start_date"] = _normalize_date_for_key(db_event["start_date"])
 
-        existing = self.db.query(EventRecord).filter_by(event_link=event_link).first()
+        existing = self.db.query(EventRecord).filter_by(
+            event_link=event_link, start_date=start_date_key
+        ).first()
         if existing:
             for k, v in db_event.items():
                 setattr(existing, k, v)

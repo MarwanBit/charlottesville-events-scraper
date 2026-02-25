@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.session import Session
 
-from .models import engine, ProcessedURL, ProcessedURLStatus
+from .models import ProcessedURL, ProcessedURLStatus
 from .constants import INITIAL_URLS
 
 class URLQueue(ABC):
@@ -32,13 +31,17 @@ class URLQueue(ABC):
         pass
 
 class PostgreSQLURLQueue(URLQueue):
+    """Requires session= from session_scope() or get_session()."""
 
-    def __init__(self):
-        SessionLocal = sessionmaker[Session](bind=engine, autoflush=False, autocommit=False)
-        self.db = SessionLocal()
+    def __init__(self, session: Session):
+        if session is None:
+            raise TypeError("PostgreSQLURLQueue requires session= (e.g. from session_scope()).")
+        self.db = session
+        self._own_session = False
 
     def close(self):
-        self.db.close()
+        if self._own_session:
+            self.db.close()
 
     def init_queue(self):
         for url in INITIAL_URLS:
@@ -54,7 +57,11 @@ class PostgreSQLURLQueue(URLQueue):
             .limit(1)
             .first()
         )
-        return row.url if row else None
+        url = row.url if row else None
+        # Commit so we don't hold an idle transaction during long get_events() scraping
+        # (avoids psycopg IdleInTransactionSessionTimeout).
+        self.db.commit()
+        return url
 
     def enqueue(self, url: str) -> None:
         """Add a URL to the queue with status PENDING (ignores if url already exists)."""
