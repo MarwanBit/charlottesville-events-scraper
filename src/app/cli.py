@@ -1,3 +1,4 @@
+"""CLI entrypoint. Run from project root as: python -m src.app.cli  or  python -m src.app"""
 from .pipeline import PostgreSQLPipeline
 
 
