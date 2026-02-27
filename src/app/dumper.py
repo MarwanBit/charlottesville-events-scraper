@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from .utils import val
 from .config import MISSING
 from .constants import DB_FIELDS
-from .repository import _normalize_date_for_key
+from .repository import _normalize_date_for_key, _normalize_time_for_key
 
 from sqlalchemy.orm.session import Session
 
@@ -94,12 +94,25 @@ class PostgreSQLDumper(BaseDumper):
     def upsert_event(self, event: dict):
         event_link = event["event_link"]
         start_date_key = _normalize_date_for_key(event.get("start_date"))
+        end_date_key = _normalize_date_for_key(event.get("end_date"))
+        start_time_key = _normalize_time_for_key(event.get("start_time"))
+        end_time_key = _normalize_time_for_key(event.get("end_time"))
         db_event = {k: v for k, v in event.items() if k in DB_FIELDS}
         if db_event.get("start_date") is not None and hasattr(db_event["start_date"], "isoformat"):
             db_event["start_date"] = _normalize_date_for_key(db_event["start_date"])
+        if db_event.get("end_date") is not None and hasattr(db_event["end_date"], "isoformat"):
+            db_event["end_date"] = _normalize_date_for_key(db_event["end_date"])
+        if db_event.get("start_time") is not None and hasattr(db_event["start_time"], "isoformat"):
+            db_event["start_time"] = _normalize_time_for_key(db_event["start_time"])
+        if db_event.get("end_time") is not None and hasattr(db_event["end_time"], "isoformat"):
+            db_event["end_time"] = _normalize_time_for_key(db_event["end_time"])
 
         existing = self.db.query(EventRecord).filter_by(
-            event_link=event_link, start_date=start_date_key
+            event_link=event_link,
+            start_date=start_date_key,
+            end_date=end_date_key,
+            start_time=start_time_key,
+            end_time=end_time_key,
         ).first()
         if existing:
             for k, v in db_event.items():
@@ -117,6 +130,7 @@ class PostgreSQLDumper(BaseDumper):
         try:
             for event in events:
                 self.upsert_event(event)
+                self.db.flush()
             self.commit()
         except Exception:
             self.rollback()

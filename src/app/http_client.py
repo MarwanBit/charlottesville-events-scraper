@@ -3,8 +3,10 @@ from abc import ABC, abstractmethod
 import asyncio
 import json
 import logging
+import os
 import queue
 import random
+import shutil
 import threading
 import time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -95,7 +97,7 @@ class HTTPClient(BaseClient):
         self.last_request_time = 0
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (compatible; EventsWebsiteBot/1.0)",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         })
 
@@ -139,16 +141,19 @@ class HTTPClient(BaseClient):
                 self._wait_if_needed()
 
                 response = self.session.get(url, timeout=10)
+                status = response.status_code
+                print(f"[HTTPClient] attempt {attempt + 1}/{self.max_retries} GET {url} -> {status}", flush=True)
                 response.raise_for_status()
-
                 self.last_request_time = time.time()
                 return response
 
             except requests.RequestException as e:
                 if attempt == self.max_retries - 1:
+                    print(f"[HTTPClient] giving up on {url}: {e}", flush=True)
                     raise e
 
                 backoff = 2 ** attempt
+                print(f"[HTTPClient] error on {url}: {e} (retrying in {backoff}s)", flush=True)
                 time.sleep(backoff)
 
     def close(self) -> None:
@@ -161,13 +166,39 @@ class NoDriverClient(BaseClient):
     Browser client using nodriver (Chrome). Use create_sync() for synchronous usage
     so you can call client.get(url) from normal code. The browser runs in a background
     thread; get() blocks until the page is fetched and DOMContentLoaded has fired.
+    Rate-limited so requests are at least min_interval_sec apart.
     """
 
-    def __init__(self):
+    def __init__(self, min_interval_sec: float = 2.0):
         self._loop = None
         self.browser = None
         self.session = self  # So generate_soup(client) can do client.session.get(url)
         self.headers = {}  # Session-like interface for base.generate_soup (User-Agent check)
+        # Default: no rate limiting unless explicitly requested.
+        env_min = os.environ.get("NODRIVER_MIN_INTERVAL_SEC")
+        if env_min is not None:
+            try:
+                self._min_interval = float(env_min)
+            except ValueError:
+                self._min_interval = 0.0
+        else:
+            self._min_interval = 0.0
+        self._last_request_time = 0.0
+        self._rate_lock = threading.Lock()
+
+    def _wait_if_needed(self) -> None:
+        """Optionally wait between browser requests. No-op when _min_interval <= 0."""
+        if self._min_interval <= 0:
+            return
+        now = time.time()
+        # Do not delay the very first request in a session; only enforce spacing between completed requests.
+        if self._last_request_time <= 0:
+            self._last_request_time = now
+            return
+        elapsed = now - self._last_request_time
+        interval = self._min_interval
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
 
     # Chrome args to reduce automation detection and improve startup (site may 403/504 otherwise)
     _BROWSER_ARGS = [
@@ -175,17 +206,94 @@ class NoDriverClient(BaseClient):
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--disable-infobars",
-        "--window-size=1920,1080",
+        "--window-size=1280,720",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
     ]
 
     @classmethod
-    async def create(cls):
-        instance = cls()
-        instance.browser = await uc.start(
-            sandbox=False,
-            headless=False,
-            browser_args=cls._BROWSER_ARGS,
+    async def create(cls, min_interval_sec: float = 2.0):
+        # Use headless when HEADLESS=1 (e.g. Docker/EC2) so there is no display.
+        headless = os.environ.get("HEADLESS", "").strip().lower() in ("1", "true", "yes")
+        if not headless:
+            # Ensure Chrome uses the same display as Xvfb/VNC (e.g. :99 in run-headed-vnc.sh).
+            os.environ.setdefault("DISPLAY", ":99")
+
+        # Ensure nodriver's local HTTP calls to the DevTools endpoint (127.0.0.1:port)
+        # are NOT routed through HTTP(S)_PROXY, which would otherwise break inside Docker
+        # when the app container is configured to use a forward proxy.
+        no_proxy_current = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        tokens = [t.strip() for t in no_proxy_current.split(",") if t.strip()]
+        for host in ("127.0.0.1", "localhost", "::1"):
+            if host not in tokens:
+                tokens.append(host)
+        no_proxy_new = ",".join(tokens)
+        os.environ["NO_PROXY"] = no_proxy_new
+        os.environ["no_proxy"] = no_proxy_new
+
+        # If a forward proxy is configured specifically for the browser (e.g. tinyproxy
+        # on the host), tell Chromium to use it for outbound HTTP(S) traffic.
+        # IMPORTANT: we only look at BROWSER_PROXY here so that generic HTTP(S)_PROXY
+        # used by requests/HTTPClient does not break nodriver/DevTools connectivity.
+        proxy_url = os.environ.get("BROWSER_PROXY")
+
+        # Build browser args per-instance so we can append proxy flags without mutating
+        # the class-level defaults.
+        browser_args = list(cls._BROWSER_ARGS)
+        if proxy_url:
+            browser_args.append(f"--proxy-server={proxy_url}")
+
+        # Optional: shared user data dir so a human can solve challenges once (via
+        # headed Chromium in VNC) and the automated browser reuses the same profile
+        # (cookies, local storage, etc.). Defaults to a stable path under /app.
+        # Use a dedicated automation profile and proactively clear any leftover
+        # Chrome singleton lock files, otherwise Chromium may abort on startup.
+        user_data_dir = os.environ.get(
+            "BROWSER_USER_DATA_DIR", "/app/browser-profile-automation"
         )
+        try:
+            os.makedirs(user_data_dir, exist_ok=True)
+            for name in os.listdir(user_data_dir):
+                if name.startswith("Singleton"):
+                    try:
+                        os.remove(os.path.join(user_data_dir, name))
+                    except OSError:
+                        pass
+        except Exception:
+            # Profile directory issues should not crash the whole client; nodriver
+            # will still start with its own defaults if this path is unusable.
+            user_data_dir = None
+
+        print(
+            "[NoDriverClient.create] "
+            f"headless={headless} "
+            f"browser_path={os.environ.get('BROWSER_PATH') or os.environ.get('CHROME_PATH') or 'auto'} "
+            f"proxy={proxy_url!r} "
+            f"user_data_dir={user_data_dir!r}",
+            flush=True,
+        )
+
+        instance = cls(min_interval_sec=min_interval_sec)
+        # Explicitly tell nodriver which browser binary to use when running in Docker.
+        # Prefer environment overrides, then common Chromium/Chrome paths.
+        browser_path = (
+            os.environ.get("BROWSER_PATH")
+            or os.environ.get("CHROME_PATH")
+            or shutil.which("chromium")
+            or shutil.which("chromium-browser")
+            or shutil.which("google-chrome")
+            or None
+        )
+        # Use no_sandbox=True so nodriver's internal root/container checks are satisfied,
+        # in addition to the explicit --no-sandbox flag in _BROWSER_ARGS.
+        instance.browser = await uc.start(
+            browser_executable_path=browser_path,
+            no_sandbox=True,
+            headless=headless,
+            user_data_dir=user_data_dir,
+            browser_args=browser_args,
+        )
+        print("[NoDriverClient.create] browser started successfully", flush=True)
         instance._loop = asyncio.get_running_loop()
         return instance
 
@@ -215,7 +323,7 @@ class NoDriverClient(BaseClient):
         self.browser = None
 
     @classmethod
-    def create_sync(cls) -> "NoDriverClient":
+    def create_sync(cls, min_interval_sec: float = 2.0) -> "NoDriverClient":
         """Create a NoDriverClient that can be used with synchronous client.get(url)."""
         result_q = queue.Queue()
         error_holder = []
@@ -225,8 +333,16 @@ class NoDriverClient(BaseClient):
             asyncio.set_event_loop(loop)
             try:
                 async def create_and_serve():
-                    client = await cls.create()
+                    print(
+                        "[NoDriverClient.create_sync] starting browser event loop thread",
+                        flush=True,
+                    )
+                    client = await cls.create(min_interval_sec=min_interval_sec)
                     result_q.put(client)
+                    print(
+                        "[NoDriverClient.create_sync] client created and queued back to main thread",
+                        flush=True,
+                    )
                     # Keep loop alive so run_coroutine_threadsafe from main thread works
                     while True:
                         await asyncio.sleep(3600)
@@ -234,6 +350,10 @@ class NoDriverClient(BaseClient):
                 loop.run_until_complete(create_and_serve())
             except Exception as e:
                 error_holder.append(e)
+                print(
+                    f"[NoDriverClient.create_sync] browser loop error: {e}",
+                    flush=True,
+                )
                 # Unregister any Browser that never got a connection so atexit
                 # doesn't call .stop() and hit AttributeError on connection.disconnect
                 try:
@@ -251,9 +371,17 @@ class NoDriverClient(BaseClient):
             return result_q.get(timeout=60)
         except queue.Empty:
             if error_holder:
+                print(
+                    f"[NoDriverClient.create_sync] timed out waiting for client; error_holder[0]={error_holder[0]}",
+                    flush=True,
+                )
                 raise RuntimeError(
                     f"NoDriverClient: browser failed to start: {error_holder[0]}"
                 ) from error_holder[0]
+            print(
+                "[NoDriverClient.create_sync] timed out waiting for client; no specific error captured",
+                flush=True,
+            )
             raise RuntimeError(
                 "NoDriverClient: browser failed to start within 60s"
             ) from None
@@ -265,7 +393,7 @@ class NoDriverClient(BaseClient):
         wait_for_timeout: int = 30,
     ) -> str:
         logger.info("NoDriver: fetch start %s", url)
-        await asyncio.sleep(random.uniform(2, 5))
+        # Local/dev runs often want maximum speed; skip artificial pre-delays.
         logger.info("NoDriver: calling browser.get(%s)", url)
         page = await self.browser.get(url)
         logger.info("NoDriver: waiting for load (timeout 30s)")
@@ -288,7 +416,6 @@ class NoDriverClient(BaseClient):
             logger.info("NoDriver: load done")
         except asyncio.TimeoutError:
             logger.warning("NoDriver: load wait timed out after 30s, continuing")
-        await asyncio.sleep(random.uniform(1, 3))
         if wait_for_selector:
             logger.info("NoDriver: waiting for selector %r (timeout %ss)", wait_for_selector, wait_for_timeout)
             try:
@@ -315,7 +442,6 @@ class NoDriverClient(BaseClient):
                 logger.info("NoDriver: selector appeared or timeout")
             except asyncio.TimeoutError:
                 logger.warning("NoDriver: wait_for_selector timed out, continuing")
-            await asyncio.sleep(random.uniform(0.5, 1.5))
         logger.info("NoDriver: getting page HTML")
         result = await page.evaluate("document.documentElement.outerHTML", return_by_value=True)
         if result is None:
@@ -356,40 +482,47 @@ class NoDriverClient(BaseClient):
         """Fetch the URL with the browser and return a requests.Response-like object (sync).
         If wait_for_selector is set, after initial load the client waits for that CSS selector
         to appear in the DOM (e.g. for JS-rendered content) before capturing HTML.
+        Only one request runs at a time; each request waits (min_interval + jitter) after the previous finished.
         """
         if self.browser is None or self._loop is None:
             return self._error_response(url, status_code=502, content=b"client closed")
         timeout_sec = timeout if timeout is not None else 120
-        logger.info("NoDriver: get(%s) timeout=%s wait_selector=%s", url, timeout_sec, wait_for_selector)
-        future = asyncio.run_coroutine_threadsafe(
-            self._fetch_page(
-                url,
-                wait_for_selector=wait_for_selector,
-                wait_for_timeout=wait_for_timeout,
-            ),
-            self._loop,
-        )
-        try:
-            html = future.result(timeout=timeout_sec)
-        except FuturesTimeoutError:
-            logger.warning("NoDriver: main-thread timeout after %ss", timeout_sec)
-            return self._error_response(url, status_code=504)
-        except asyncio.TimeoutError:
-            logger.warning("NoDriver: fetch timed out (90s) in browser thread")
-            return self._error_response(url, status_code=504)
-        except Exception as e:
-            logger.exception("NoDriver: fetch failed (502): %s", e)
-            return self._error_response(
-                url,
-                status_code=502,
-                content=("NoDriver error: %s" % e).encode("utf-8"),
+        with self._rate_lock:
+            self._wait_if_needed()
+            logger.info("NoDriver: get(%s) timeout=%s wait_selector=%s", url, timeout_sec, wait_for_selector)
+            future = asyncio.run_coroutine_threadsafe(
+                self._fetch_page(
+                    url,
+                    wait_for_selector=wait_for_selector,
+                    wait_for_timeout=wait_for_timeout,
+                ),
+                self._loop,
             )
-        response = requests.Response()
-        response.status_code = 200
-        response.url = url
-        response._content = html.encode("utf-8") if isinstance(html, str) else html
-        response.headers["Content-Type"] = "text/html; charset=utf-8"
-        return response
+            try:
+                html = future.result(timeout=timeout_sec)
+            except FuturesTimeoutError:
+                logger.warning("NoDriver: main-thread timeout after %ss", timeout_sec)
+                self._last_request_time = time.time()
+                return self._error_response(url, status_code=504)
+            except asyncio.TimeoutError:
+                logger.warning("NoDriver: fetch timed out (90s) in browser thread")
+                self._last_request_time = time.time()
+                return self._error_response(url, status_code=504)
+            except Exception as e:
+                logger.exception("NoDriver: fetch failed (502): %s", e)
+                self._last_request_time = time.time()
+                return self._error_response(
+                    url,
+                    status_code=502,
+                    content=("NoDriver error: %s" % e).encode("utf-8"),
+                )
+            self._last_request_time = time.time()
+            response = requests.Response()
+            response.status_code = 200
+            response.url = url
+            response._content = html.encode("utf-8") if isinstance(html, str) else html
+            response.headers["Content-Type"] = "text/html; charset=utf-8"
+            return response
 
 
 class HybridClient(BaseClient):
@@ -418,31 +551,47 @@ class HybridClient(BaseClient):
         wait_for_selector: Optional[str] = None,
         wait_for_timeout: int = 30,
     ) -> requests.Response:
-        """Use NoDriverClient for url; on browser startup failure return 503 so pipeline can continue."""
-        if host in self._browser_unavailable_hosts:
-            r = requests.Response()
-            r.status_code = 503
-            r.url = url
-            r._content = b"browser unavailable (failed to start in this environment)"
-            return r
+        """
+        Use NoDriverClient for url.
+        During debugging, do NOT mask browser failures as synthetic 503s; let errors surface.
+        """
+        print(
+            f"[HybridClient] using browser for host={host} url={url}",
+            flush=True,
+        )
         try:
             if self._nodriver is None:
+                print(
+                    "[HybridClient] creating NoDriverClient via create_sync()",
+                    flush=True,
+                )
                 self._nodriver = NoDriverClient.create_sync()
-            return self._nodriver.get(
+                print(
+                    "[HybridClient] NoDriverClient created successfully",
+                    flush=True,
+                )
+            print(
+                "[HybridClient] calling NoDriverClient.get()",
+                flush=True,
+            )
+            response = self._nodriver.get(
                 url,
                 timeout=browser_timeout,
                 wait_for_selector=wait_for_selector,
                 wait_for_timeout=wait_for_timeout,
             )
+            print(
+                f"[HybridClient] NoDriverClient.get() returned status={response.status_code}",
+                flush=True,
+            )
+            return response
         except RuntimeError as e:
-            if "browser failed to start" in str(e):
-                logger.warning("HybridClient: browser unavailable for %s, returning 503", url)
-                self._browser_unavailable_hosts.add(host)
-                r = requests.Response()
-                r.status_code = 503
-                r.url = url
-                r._content = b"browser unavailable (Chrome/nodriver could not start)"
-                return r
+            # Surface full browser/nodriver error; do not convert to 503.
+            logger.exception("HybridClient: browser error for %s: %s", url, e)
+            print(
+                f"[HybridClient] RuntimeError from browser for {url}: {e}",
+                flush=True,
+            )
             raise
 
     def get(
@@ -454,21 +603,23 @@ class HybridClient(BaseClient):
     ) -> requests.Response:
         host = urlparse(url).netloc
         browser_timeout = timeout if timeout is not None and timeout >= self._BROWSER_TIMEOUT else self._BROWSER_TIMEOUT
-        if host in self._browser_unavailable_hosts:
-            r = requests.Response()
-            r.status_code = 503
-            r.url = url
-            r._content = b"browser unavailable (failed to start in this environment)"
-            return r
         # Use browser when caller asked for wait_for_selector (JS-rendered content) or host already known to need browser
         if wait_for_selector is not None or host in self._use_browser_hosts:
             if wait_for_selector is not None and host not in self._use_browser_hosts:
                 self._use_browser_hosts.add(host)
-            return self._browser_get_or_503(
+            resp = self._browser_get_or_503(
                 url, host, browser_timeout,
                 wait_for_selector=wait_for_selector,
                 wait_for_timeout=wait_for_timeout,
             )
+            if resp.status_code in (502, 503, 504):
+                self._use_browser_hosts.discard(host)
+                logger.info(
+                    "HybridClient: browser got %s for %s, will try HTTP first next time for this host",
+                    resp.status_code, host,
+                )
+            print(f"[HybridClient] BROWSER GET {url} -> {resp.status_code}", flush=True)
+            return resp
         try:
             response = self._http.get(url)
         except requests.HTTPError as e:
@@ -476,31 +627,56 @@ class HybridClient(BaseClient):
             if e.response is not None and e.response.status_code == 403:
                 logger.info("HybridClient: 403 for %s, escalating to NoDriverClient", url)
                 self._use_browser_hosts.add(host)
-                return self._browser_get_or_503(
+                resp = self._browser_get_or_503(
                     url, host, browser_timeout,
                     wait_for_selector=wait_for_selector,
                     wait_for_timeout=wait_for_timeout,
                 )
+                if resp.status_code in (502, 503, 504):
+                    self._use_browser_hosts.discard(host)
+                    logger.info(
+                        "HybridClient: browser got %s for %s, will try HTTP first next time for this host",
+                        resp.status_code, host,
+                    )
+                print(f"[HybridClient] BROWSER GET {url} after HTTP 403 -> {resp.status_code}", flush=True)
+                return resp
             raise
         if response.status_code == 403:
             logger.info("HybridClient: 403 for %s, escalating to NoDriverClient", url)
             self._use_browser_hosts.add(host)
-            return self._browser_get_or_503(
+            resp = self._browser_get_or_503(
                 url, host, browser_timeout,
                 wait_for_selector=wait_for_selector,
                 wait_for_timeout=wait_for_timeout,
             )
+            if resp.status_code in (502, 503, 504):
+                self._use_browser_hosts.discard(host)
+                logger.info(
+                    "HybridClient: browser got %s for %s, will try HTTP first next time for this host",
+                    resp.status_code, host,
+                )
+            print(f"[HybridClient] BROWSER GET {url} after 403 -> {resp.status_code}", flush=True)
+            return resp
         # Cloudflare challenge returns 200 with "Just a moment..." / "Enable JavaScript and cookies"
         if response.status_code == 200:
             text = (response.text or "").lower()
             if "just a moment" in text or "enable javascript and cookies to continue" in text:
                 logger.info("HybridClient: Cloudflare challenge for %s, escalating to NoDriverClient", url)
                 self._use_browser_hosts.add(host)
-                return self._browser_get_or_503(
+                resp = self._browser_get_or_503(
                     url, host, browser_timeout,
                     wait_for_selector=wait_for_selector,
                     wait_for_timeout=wait_for_timeout,
                 )
+                if resp.status_code in (502, 503, 504):
+                    self._use_browser_hosts.discard(host)
+                    logger.info(
+                        "HybridClient: browser got %s for %s, will try HTTP first next time for this host",
+                        resp.status_code, host,
+                    )
+                print(f"[HybridClient] BROWSER GET {url} after JS challenge -> {resp.status_code}", flush=True)
+                return resp
+        print(f"[HybridClient] HTTP GET {url} -> {response.status_code}", flush=True)
         return response
 
     def close(self) -> None:

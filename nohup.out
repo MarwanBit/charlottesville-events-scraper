@@ -1,0 +1,122 @@
+Connecting to database...
+Connected. Initializing queue...
+Queue ready. Processing URLs...
+[PIPELINE] URL #1: https://exploregeorgia.org/cartersville/events/entertainment/special-exhibit-measurement-rules
+[PIPELINE]   discovered 0 new URLs to enqueue
+HybridClient: browser error for https://exploregeorgia.org/cartersville/events/entertainment/special-exhibit-measurement-rules: NoDriverClient: browser failed to start: 
+                ---------------------
+                Failed to connect to browser
+                ---------------------
+                One of the causes could be when you are running as root.
+                In that case you need to pass no_sandbox=True 
+                
+Traceback (most recent call last):
+  File "/app/src/app/http_client.py", line 258, in run_browser_loop
+    loop.run_until_complete(create_and_serve())
+  File "/usr/local/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 252, in create_and_serve
+    client = await cls.create(min_interval_sec=min_interval_sec)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 208, in create
+    instance.browser = await uc.start(
+                       ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/util.py", line 102, in start
+    return await Browser.create(config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/browser.py", line 95, in create
+    await instance.start()
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/browser.py", line 439, in start
+    raise Exception(
+Exception: 
+                ---------------------
+                Failed to connect to browser
+                ---------------------
+                One of the causes could be when you are running as root.
+                In that case you need to pass no_sandbox=True 
+                
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/src/app/http_client.py", line 458, in _browser_get_or_503
+    self._nodriver = NoDriverClient.create_sync()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 278, in create_sync
+    raise RuntimeError(
+RuntimeError: NoDriverClient: browser failed to start: 
+                ---------------------
+                Failed to connect to browser
+                ---------------------
+                One of the causes could be when you are running as root.
+                In that case you need to pass no_sandbox=True 
+                
+Traceback (most recent call last):
+  File "/app/src/app/http_client.py", line 258, in run_browser_loop
+    loop.run_until_complete(create_and_serve())
+  File "/usr/local/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 252, in create_and_serve
+    client = await cls.create(min_interval_sec=min_interval_sec)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 208, in create
+    instance.browser = await uc.start(
+                       ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/util.py", line 102, in start
+    return await Browser.create(config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/browser.py", line 95, in create
+    await instance.start()
+  File "/usr/local/lib/python3.12/site-packages/nodriver/core/browser.py", line 439, in start
+    raise Exception(
+Exception: 
+                ---------------------
+                Failed to connect to browser
+                ---------------------
+                One of the causes could be when you are running as root.
+                In that case you need to pass no_sandbox=True 
+                
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/app/src/app/__main__.py", line 5, in <module>
+    main()
+  File "/app/src/app/cli.py", line 8, in main
+    pipeline.run()
+  File "/app/src/app/pipeline.py", line 105, in run
+    events = website.get_events(self.client)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/websites/explore_georgia.py", line 123, in get_events
+    self.generate_soup(client)
+  File "/app/src/app/websites/explore_georgia.py", line 107, in generate_soup
+    response = client.get(
+               ^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 483, in get
+    resp = self._browser_get_or_503(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 458, in _browser_get_or_503
+    self._nodriver = NoDriverClient.create_sync()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/src/app/http_client.py", line 278, in create_sync
+    raise RuntimeError(
+RuntimeError: NoDriverClient: browser failed to start: 
+                ---------------------
+                Failed to connect to browser
+                ---------------------
+                One of the causes could be when you are running as root.
+                In that case you need to pass no_sandbox=True 
+                
+Exception ignored in: <function BaseSubprocessTransport.__del__ at 0xffff96faf240>
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/asyncio/base_subprocess.py", line 126, in __del__
+  File "/usr/local/lib/python3.12/asyncio/base_subprocess.py", line 104, in close
+  File "/usr/local/lib/python3.12/asyncio/unix_events.py", line 767, in close
+  File "/usr/local/lib/python3.12/asyncio/unix_events.py", line 753, in write_eof
+  File "/usr/local/lib/python3.12/asyncio/base_events.py", line 799, in call_soon
+  File "/usr/local/lib/python3.12/asyncio/base_events.py", line 545, in _check_closed
+RuntimeError: Event loop is closed

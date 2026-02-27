@@ -3,96 +3,106 @@ from typing import Optional
 import requests
 from bs4 import Tag, BeautifulSoup
 from ..utils import clean_text
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, time, timedelta
 import dateparser
 import re
 
-def extract_datetime_range(text, reference_date=None):
-    """
-    Extract start_date, end_date, start_time, end_time from messy strings like:
-    - "Sep 13, 2026. 8 p.m." (single date, single time)
-    - "Sundays, Mondays, ... , Now - Mar 09, 2026. 11 AM - 4 PM"
-    - "3rd Thursdays, Now - Dec 17, 2026. 6 p.m. to 7 p.m."
 
-    Ignores recurrence info and returns a dict with datetime.date/datetime and datetime.time objects.
+def extract_datetime_range(
+    text: str,
+    reference_date: Optional[datetime] = None,
+) -> list[tuple[date | None, date | None, time | None, time | None]]:
+    """
+    Extract VisitMA-style date/time strings into a list of
+    (start_date, end_date, start_time, end_time) tuples.
+
+    Each tuple represents one calendar day; start_date == end_date for that
+    tuple. For a multi-day range we expand into one tuple per day; for a
+    single date we return a one-element list. On parse failure we return
+    [(None, None, None, None)].
     """
     if reference_date is None:
         reference_date = datetime.now()
-    ref_date = reference_date.date() if hasattr(reference_date, 'date') else reference_date
 
-    # Step 1: Separate date part from time part. Time part is at the end and looks like "8 p.m." or "6 p.m. to 7 p.m."
-    # When there's no numeric time (e.g. "Jul 11, 2026. Evening" or "Jun 26, 2026. TBA"), split on last ". " and parse the date part only.
-    time_suffix = re.search(
-        r'\d{1,2}(:\d{2})?\s*(?:a\.m\.|p\.m\.|AM|PM)(?:\s*(?:to|-)\s*\d{1,2}(:\d{2})?\s*(?:a\.m\.|p\.m\.|AM|PM))?\s*$',
-        text,
-        re.IGNORECASE
-    )
-    if time_suffix:
-        date_text = text[:time_suffix.start()].strip().rstrip('.').strip()
-        # Strip trailing non-date words (e.g. "Starting" in "May 10, 2026. Starting")
-        date_text = re.sub(r'\.\s*(?:Starting|Through|Until)\s*$', '', date_text, flags=re.IGNORECASE).strip().rstrip('.').strip()
-        time_text = time_suffix.group(0).strip()
-    else:
-        # No numeric time suffix (e.g. "Jul 11, 2026. Evening" or "Jun 26, 2026. TBA") — take text before last ". " as date part
-        if '. ' in text:
-            date_text = text.rsplit('. ', 1)[0].strip()
-        else:
-            date_text = text.strip()
-        time_text = ''
+    s = (text or "").strip()
+    if not s:
+        return [(None, None, None, None)]
 
-    # Step 2: Parse time part (range "X to Y" / "X - Y" or single "8 p.m.")
-    time_range_match = re.search(
-        r'(\d{1,2}(:\d{2})?\s*(a\.m\.|p\.m\.|AM|PM))\s*(?:to|-)\s*(\d{1,2}(:\d{2})?\s*(a\.m\.|p\.m\.|AM|PM))',
-        time_text,
-        re.IGNORECASE
-    )
-    single_time_match = re.search(
-        r'(\d{1,2}(:\d{2})?\s*(a\.m\.|p\.m\.|AM|PM))',
-        time_text,
-        re.IGNORECASE
-    )
+    # Normalize AM/PM variants.
+    norm = re.sub(r"(?i)a\.m\.", "AM", s)
+    norm = re.sub(r"(?i)p\.m\.", "PM", norm)
+
+    # -------- Time parsing --------
+    time_pattern = re.compile(r"\b\d{1,2}(:\d{2})?\s*[AP]M\b", re.IGNORECASE)
+    time_matches = [m.group(0) for m in time_pattern.finditer(norm)]
 
     start_time = end_time = None
-    if time_range_match:
-        start_time = dateparser.parse(time_range_match.group(1), settings={'RELATIVE_BASE': reference_date}).time()
-        end_time = dateparser.parse(time_range_match.group(4), settings={'RELATIVE_BASE': reference_date}).time()
-    elif single_time_match:
-        start_time = dateparser.parse(single_time_match.group(1), settings={'RELATIVE_BASE': reference_date}).time()
+    if time_matches:
+        first = dateparser.parse(
+            time_matches[0], settings={"RELATIVE_BASE": reference_date}
+        )
+        start_time = first.time() if first else None
+        # If there is an explicit range ("to" / "-" / "–" / "—"), use the second time as end_time.
+        if len(time_matches) >= 2 and re.search(r"\b(to|-|–|—)\b", norm, re.IGNORECASE):
+            second = dateparser.parse(
+                time_matches[1], settings={"RELATIVE_BASE": reference_date}
+            )
+            end_time = second.time() if second else None
 
-    # Step 3: Parse date part. If it contains a range (" - "), take segment after last comma for left side.
-    date_seps = [' - ', '–', '—']
-    date_parts = None
-    for sep in date_seps:
-        if sep in date_text:
-            date_parts = date_text.split(sep, 1)
-            break
-    if date_parts is None:
-        date_parts = [date_text]
+    # -------- Date parsing --------
+    start_date = end_date = None
 
-    # When we have "Recurrence, Now - Mar 09, 2026", left is "Recurrence, Now", right is "Mar 09, 2026"
-    # When we have "Sep 13, 2026" (no range), date_parts[0] is the full string
-    start_str = date_parts[0].strip()
-    if len(date_parts) > 1 and ',' in start_str:
-        start_str = start_str.split(',')[-1].strip()
-    if start_str.lower() == 'now':
-        start_date = ref_date
+    # Pattern A: full dates on both sides, e.g. "Nov 21, 2025 - Fri, May 22, 2026"
+    pat_full_range = re.compile(
+        r"([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})\s*-\s*(?:[A-Za-z]{3},\s*)?([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})"
+    )
+    m = pat_full_range.search(norm)
+    if m:
+        left, right = m.group(1), m.group(2)
+        left_dt = dateparser.parse(left, settings={"RELATIVE_BASE": reference_date})
+        right_dt = dateparser.parse(right, settings={"RELATIVE_BASE": reference_date})
+        start_date = left_dt.date() if left_dt else None
+        end_date = right_dt.date() if right_dt else None
     else:
-        start_parsed = dateparser.parse(start_str, settings={'RELATIVE_BASE': reference_date})
-        start_date = start_parsed.date() if start_parsed else None
+        # Pattern B: month/day without year on left, full date with year on right.
+        # e.g. "Fri, Jun 19 - Sun, Jun 28, 2026"
+        pat_partial_left = re.compile(
+            r"([A-Za-z]{3,9}\s+\d{1,2})\s*-\s*(?:[A-Za-z]{3},\s*)?([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})"
+        )
+        m = pat_partial_left.search(norm)
+        if m:
+            left, right = m.group(1), m.group(2)
+            right_dt = dateparser.parse(right, settings={"RELATIVE_BASE": reference_date})
+            if right_dt:
+                end_date = right_dt.date()
+                # Assume same year for left side.
+                left_full = f"{left} {end_date.year}"
+                left_dt = dateparser.parse(
+                    left_full, settings={"RELATIVE_BASE": reference_date}
+                )
+                start_date = left_dt.date() if left_dt else None
+        else:
+            # Single full date somewhere in the string, e.g. "Mar 15, 2026" or "Aug 31, 2026"
+            m = re.search(r"[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4}", norm)
+            if m:
+                d = dateparser.parse(m.group(0), settings={"RELATIVE_BASE": reference_date})
+                if d:
+                    start_date = end_date = d.date()
+    # -------- Convert to list-of-tuples --------
+    if start_date is None and end_date is None:
+        return [(None, None, start_time, end_time)]
 
-    if len(date_parts) > 1:
-        end_str = date_parts[1].strip()
-        end_parsed = dateparser.parse(end_str, settings={'RELATIVE_BASE': reference_date})
-        end_date = end_parsed.date() if end_parsed else None
-    else:
-        end_date = None
+    if start_date is None:
+        start_date = end_date
+    if end_date is None:
+        end_date = start_date
 
-    return {
-        'start_date': start_date,
-        'end_date': end_date,
-        'start_time': start_time,
-        'end_time': end_time
-    }
+    result: list[tuple[date, date, time | None, time | None]] = []
+    current = start_date
+    while current <= end_date:
+        result.append((current, current, start_time, end_time))
+        current = current + timedelta(days=1)
+    return result
 
 
 class VisitMAWebsite(EventsWebsite):
@@ -101,6 +111,39 @@ class VisitMAWebsite(EventsWebsite):
         super().__init__(url, soup)
         self.BASE_URL = "https://www.visitma.com"
         self.BASE_EVENTS_URL = self.BASE_URL + "/events"
+
+    def generate_soup(self, client: Optional[requests.Session] = None) -> None:
+        """
+        Override to use HybridClient/NoDriverClient wait_for_selector so the
+        JS-rendered event cards are present before we parse.
+        """
+        if self.soup:
+            return
+
+        from ..http_client import NoDriverClient, HybridClient  # lazy import
+
+        session = client.session if client and hasattr(client, "session") else requests.Session()
+        if "User-Agent" not in session.headers:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0 (compatible; VisitMAEventsBot/1.0)"}
+            )
+
+        try:
+            if isinstance(client, (NoDriverClient, HybridClient)):
+                # Wait for event cards or event links to appear.
+                response = client.get(
+                    self.url,
+                    timeout=120,
+                    wait_for_selector=".grid-block.grid-api, a[href^=\"/event/\"]",
+                    wait_for_timeout=45,
+                )
+            else:
+                response = session.get(self.url, timeout=20)
+            response.raise_for_status()
+            self.soup = BeautifulSoup(response.text, "html.parser")
+        except requests.RequestException as e:
+            print(f"[VisitMAWebsite] Error fetching {self.url}: {e}", flush=True)
+            self.soup = None
 
     def parse_listing_cards(self, client: Optional[requests.session] = None) -> list[Tag]:
         if not self.soup:
@@ -112,24 +155,9 @@ class VisitMAWebsite(EventsWebsite):
 
     def extract_event_from_card(self, card: Tag) -> list[dict]:
         event_link_el = card.select_one("h3.location-name a.grid-block-link-wrapper")
-        title_el = card.select_one("h3.location-name a.grid-block-link-wrapper")
-        date_el = card.select_one("div.grid-content-inner p")
-
         event_link = self.BASE_URL + event_link_el.get("href") if event_link_el and event_link_el.get("href") else ""
-        title = clean_text(title_el.get_text(strip=True)) if title_el else ""
-        date = clean_text(date_el.get_text(strip=True)) if date_el else ""
-
-        address = None
-        phone = None
-        website = None
-
         return {
             "event_link": event_link,
-            "title": title,
-            "date": date,
-            "address": None,
-            "phone": None,
-            "website": None,
             "scraped_at": datetime.now(timezone.utc).isoformat()
         }
 
@@ -138,11 +166,14 @@ class VisitMAWebsite(EventsWebsite):
             self.generate_soup(client)
         if not self.soup:
             return []
+        '''
         cards = self.parse_listing_cards(client)
         res = []
         for card in cards:
             res.append(self.extract_event_from_card(card))
         return res
+        '''
+        return []
 
     def extract_links(self, client: Optional[requests.session] = None) -> list[str]:
         if not self.soup:
@@ -188,35 +219,41 @@ class VisitMAEventWebsite(EventsWebsite):
         website_el = self.soup.select_one("a.website.event-url")
         date_el = self.soup.select_one("div.when")
         img_el = self.soup.select_one("img.img")
+        title_el = self.soup.select_one("div.mott-single-contact h3")
 
         description = clean_text(description_el.get_text()) if description_el else ""
         address = clean_text(address_el.get_text()) if address_el else ""
         phone = clean_text(phone_el.get_text(strip=True)) if phone_el else ""
         website = clean_text(website_el.get("href")) if website_el and website_el.get("href") else ""
         image_url = clean_text(img_el.get("src")) if img_el else ""
+        title = clean_text(title_el.get_text(strip=True)) if title_el else ""
         organizer = None
 
         date_text = date_el.get_text(strip=True) if date_el else ""
-        dt = extract_datetime_range(date_text)
-        start_date = dt.get("start_date")
-        end_date = dt.get("end_date")
-        start_time = dt.get("start_time")
-        end_time = dt.get("end_time")
+        ranges = extract_datetime_range(date_text)
 
-        return [{
-            "event_link": self.url,
-            "description": description,
-            "image_url": image_url,
-            "organizer": organizer,
-            "start_date": start_date,
-            "end_date": end_date,
-            "start_time": start_time,
-            "end_time": end_time,
-            "address": address,
-            "scraped_at":  datetime.now(timezone.utc).isoformat(),
-            "website": website,
-            "phone": phone
-        }]
+        events: list[dict] = []
+        scraped_at = datetime.now(timezone.utc).isoformat()
+        for start_date, end_date, start_time, end_time in ranges:
+            events.append(
+                {
+                    "title": title,
+                    "event_link": self.url,
+                    "description": description,
+                    "image_url": image_url,
+                    "organizer": organizer,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "address": address,
+                    "scraped_at": scraped_at,
+                    "website": website,
+                    "phone": phone,
+                }
+            )
+
+        return events
 
     def extract_links(self, client: Optional[requests.Session] = None) -> list[str]:
         return []

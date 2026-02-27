@@ -31,11 +31,17 @@ class EventsWebsite(ABC):
 
         try:
             response = session.get(self.url, timeout=10)
+            status = response.status_code
+            print(f"[HTTP] GET {self.url} -> {status}", flush=True)
             response.raise_for_status()  # Raise error for HTTP 4xx/5xx
             self.soup = BeautifulSoup(response.text, 'html.parser')
+        except requests.HTTPError as e:
+            resp = e.response
+            code = resp.status_code if resp is not None else "unknown"
+            print(f"[HTTP ERROR] GET {self.url} -> {code}: {e}", flush=True)
+            self.soup = None
         except requests.RequestException as e:
-            # Handle network errors safely
-            print(f"Error fetching {self.url}: {e}")
+            print(f"[HTTP ERROR] GET {self.url} -> network error: {e}", flush=True)
             self.soup = None
         
 

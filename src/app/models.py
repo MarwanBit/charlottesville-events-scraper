@@ -1,12 +1,16 @@
 from contextlib import contextmanager
-from sqlalchemy import create_engine, Integer, Text, DateTime, UniqueConstraint
+import os
+from sqlalchemy import create_engine, Integer, Text, DateTime, UniqueConstraint, Float
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column, sessionmaker
 from sqlalchemy.orm.session import Session
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 from enum import Enum
 
-DATABASE_URL = "postgresql+psycopg://events:events@127.0.0.1:5432/events"
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql+psycopg://events:events@127.0.0.1:5432/events",
+)
 
 # No connection pool: each session/connect gets a real connection that is closed when done.
 # Avoids "QueuePool limit reached" entirely. Slightly more churn, fine for pipeline/dashboard.
@@ -116,7 +120,16 @@ class ProcessedURL(Base):
 # ------------------------
 class EventRecord(Base):
     __tablename__ = "event_records"
-    __table_args__ = (UniqueConstraint("event_link", "start_date", name="uq_event_link_start_date"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "event_link",
+            "start_date",
+            "end_date",
+            "start_time",
+            "end_time",
+            name="uq_event_link_start_date_end_date_start_time_end_time",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
@@ -142,6 +155,12 @@ class EventRecord(Base):
     website: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    contact: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     scraped_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 

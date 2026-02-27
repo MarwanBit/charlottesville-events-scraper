@@ -1,0 +1,17 @@
+# So the image only contains source and deps, not local/cache junk.
+# The image will have the code that was in the repo when you ran `docker build`.
+.venv
+venv
+env
+.git
+.pytest_cache
+.mypy_cache
+.ruff_cache
+__pycache__
+*.pyc
+.terraform
+terraform.tfstate*
+node_modules
+*.md
+.idea
+.vscode

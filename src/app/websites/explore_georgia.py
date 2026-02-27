@@ -1,5 +1,5 @@
 from .base import EventsWebsite
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import requests
 from bs4 import Tag, BeautifulSoup
 from datetime import datetime, timezone
@@ -15,6 +15,9 @@ from ..explore_georgia_parsing import (
     parse_date_range,
     parse_event_datetime_range,
 )
+
+if TYPE_CHECKING:
+    from ..http_client import NoDriverClient, HybridClient
 
 
 class ExploreGeorgiaWebsite(EventsWebsite):
@@ -34,24 +37,10 @@ class ExploreGeorgiaWebsite(EventsWebsite):
 
     def extract_event_from_card(self, card: Tag) -> list[dict]:
         event_link_el = card.select_one("div.title-venue a")
-        title_el = card.select_one("div.title-venue a")
-        address_el = card.select_one("div.address-venue")
-        image_el = card.find("img")
-
         event_link = self.BASE_URL + event_link_el.get("href") if event_link_el and event_link_el.get("href") else ""
-        title = clean_text(title_el.get_text(strip=True)) if title_el else ""
-        address = clean_text(address_el.get_text(strip=True)) if address_el else ""
-        image_url = clean_text(image_el.get("src")) if image_el and image_el.get("src") else ""
-        phone = None 
-        website = None
 
         return {
             "event_link": event_link,
-            "title": title,
-            "address": address,
-            "phone": phone,
-            "website": website,
-            "image_url": image_url,
             "scraped_at": datetime.now(timezone.utc).isoformat()
         }
 
@@ -98,64 +87,125 @@ class ExploreGeorgiaEventWebsite(EventsWebsite):
         super().__init__(url, soup)
         self.BASE_URL = "https://exploregeorgia.org"
 
+    def generate_soup(self, client: Optional[requests.Session] = None) -> None:
+        """
+        Override to use browser client wait_for_selector so JS-rendered date list is present.
+        Falls back to plain requests if no browser client is provided.
+        """
+        if self.soup:
+            return
+        from ..http_client import NoDriverClient, HybridClient
+        session = client.session if client else requests.Session()
+        if "User-Agent" not in session.headers:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0 (compatible; EventsWebsiteBot/1.0)"}
+            )
+        try:
+            if isinstance(client, (NoDriverClient, HybridClient)):
+                # Wait until the JS-populated date list appears before capturing HTML.
+                # The schedule rows are rendered as elements with the 'date-list-item' class.
+                response = client.get(
+                    self.url,
+                    timeout=120,
+                    wait_for_selector=".month-group .date-list-item",
+                    wait_for_timeout=45,
+                )
+            else:
+                response = session.get(self.url, timeout=10)
+            response.raise_for_status()
+            self.soup = BeautifulSoup(response.text, "html.parser")
+        except requests.RequestException as e:
+            print(f"Error fetching {self.url}: {e}")
+            self.soup = None
+
     def get_events(self, client: Optional[requests.session] = None) -> list[dict]:
         if not self.soup:
             self.generate_soup(client)
         if not self.soup:
+            print("[ExploreGeorgiaEventWebsite] no soup loaded for event page; returning 0 events", flush=True)
             return []
 
         description_el = self.soup.select_one("div.mmg8_listing_fields_description")
         phone_el = self.soup.select_one("a.phone-link")
         website_el = self.soup.select_one("a.website-link")
-        img_el = None
+        img_el = self.soup.select_one('img')
         title_el = self.soup.select_one('div.group-data-node-intro h1')
 
         # Address block: div.mmg8_listing_fields_address (or mmg8-listing-fields) contains venue, div.address, city-state-zip
         address_block = self.soup.select_one("div.mmg8_listing_fields_address")
         if not address_block:
             address_block = self.soup.select_one("div.mmg8-listing-fields.mmg8_listing_fields_address")
+        address_venue_el = address_block.select_one("div.address-venue") if address_block else None
         street_el = address_block.select_one("div.address") if address_block else None
         city_el = address_block.select_one("span.city") if address_block else None
         state_el = address_block.select_one("span.state") if address_block else None
         zip_code_el = address_block.select_one("span.zip") if address_block else None
 
+        address_venue = clean_text(address_venue_el.get_text(strip=True)) if address_venue_el else ""
         street = clean_text(street_el.get_text(strip=True)) if street_el else ""
         city = clean_text(city_el.get_text(strip=True)) if city_el else ""
         state = clean_text(state_el.get_text(strip=True)) if state_el else ""
         zip_code = clean_text(zip_code_el.get_text(strip=True)) if zip_code_el else ""
         # Combine into full address (skip overwriting with street-only below)
-        parts = [p for p in [street, city, f"{state} {zip_code}".strip()] if p]
+        parts = [p for p in [address_venue, street, city, f"{state} {zip_code}".strip()] if p]
         address = ", ".join(parts) if parts else ""
 
         description = clean_text(description_el.get_text()) if description_el else ""
         phone = clean_text(phone_el.get_text(strip=True)) if phone_el else ""
         website = clean_text(website_el.get("href")) if website_el and website_el.get("href") else ""
-        image_url = clean_text(img_el.get("src")) if img_el and img_el.get("src") else ""
+        image_url = self.BASE_URL + clean_text(img_el.get("src")) if img_el and img_el.get("src") else ""
         organizer = None
         title = clean_text(title_el.get_text(strip=True)) if title_el else ""
 
-        events = []
+        events: list[dict] = []
         scraped_at = datetime.now(timezone.utc).isoformat()
 
-        for item in self.soup.select(".month-group .date-list-item"):
-            date_text = item.select_one(".month-and-day-number").get_text(strip=True)
-            start_date, end_date, start_time, end_time = parse_event_datetime_range(date_text)
+        # Date rows: originally ".month-group .date-list-item" with a ".month-and-day-number" child.
+        date_items = self.soup.select(".month-group .date-list-item")
+        if not date_items:
+            # Fallback: try a looser selector; refine this with the live HTML from VNC if needed.
+            date_items = self.soup.select(".date-list-item")
+        print(
+            f"[ExploreGeorgiaEventWebsite] found {len(date_items)} date rows for {self.url}",
+            flush=True,
+        )
 
-            events.append({
-                "title": title,
-                "event_link": self.url,
-                "description": description,
-                "image_url": image_url,
-                "organizer": organizer,
-                "address": address,
-                "scraped_at": scraped_at,
-                "website": website,
-                "phone": phone,
-                "start_date": start_date,
-                "end_date": end_date,
-                "start_time": start_time,
-                "end_time": end_time,
-            })
+        for item in date_items:
+            date_el = item.select_one(".month-and-day-number")
+            if not date_el:
+                print(
+                    "[ExploreGeorgiaEventWebsite] date-list-item missing .month-and-day-number; skipping",
+                    flush=True,
+                )
+                continue
+            date_text = date_el.get_text(strip=True)
+            for (
+                start_date,
+                end_date,
+                start_time,
+                end_time,
+            ) in parse_event_datetime_range(date_text):
+                events.append(
+                    {
+                        "title": title,
+                        "event_link": self.url,
+                        "description": description,
+                        "image_url": image_url,
+                        "organizer": organizer,
+                        "address": address,
+                        "scraped_at": scraped_at,
+                        "website": website,
+                        "phone": phone,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                    }
+                )
+        print(
+            f"[ExploreGeorgiaEventWebsite] emitting {len(events)} events for {self.url}",
+            flush=True,
+        )
         return events
 
     def extract_links(self, client: Optional[requests.Session] = None) -> list[str]:

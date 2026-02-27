@@ -12,6 +12,20 @@ variable "db_allowed_cidr" {
   default     = "0.0.0.0/0"
 }
 
+# SSH key pair name (must exist in AWS EC2 Key Pairs in us-east-1) for EC2 login.
+variable "ec2_key_name" {
+  description = "Name of the EC2 key pair for SSH access"
+  type        = string
+  default     = ""
+}
+
+# Docker image to run on EC2 (pulled from Docker Hub on first boot).
+variable "ec2_docker_image" {
+  description = "Docker image for the scraper app (e.g. busco-events-scraper:latest)"
+  type        = string
+  default     = "marwanbit/busco-events-scraper:latest"
+}
+
 
 # create default vpc if one does not exit
 resource "aws_default_vpc" "default_vpc" {
@@ -46,6 +60,14 @@ resource "aws_security_group" "webserver_security_group" {
     description      = "http access"
     from_port        = 80
     to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description      = "SSH for EC2"
+    from_port        = 22
+    to_port          = 22
     protocol         = "tcp"
     cidr_blocks      = ["0.0.0.0/0"]
   }
@@ -141,4 +163,47 @@ output "database_url" {
   description = "PostgreSQL URL for the app (password in Terraform state)"
   value       = "postgresql://${aws_db_instance.db_instance.username}:${aws_db_instance.db_instance.password}@${aws_db_instance.db_instance.address}:${aws_db_instance.db_instance.port}/${aws_db_instance.db_instance.db_name}"
   sensitive   = true
+}
+
+# ---------------------------------------------------------------------------
+# EC2 instance (same subnet as RDS, webserver security group → can reach RDS)
+# User data: installs Docker, pulls ec2_docker_image, runs it with RDS DATABASE_URL.
+# ---------------------------------------------------------------------------
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-ebs"]
+  }
+}
+
+locals {
+  database_url_psycopg = "postgresql+psycopg://${aws_db_instance.db_instance.username}:${aws_db_instance.db_instance.password}@${aws_db_instance.db_instance.address}:${aws_db_instance.db_instance.port}/${aws_db_instance.db_instance.db_name}"
+}
+
+resource "aws_instance" "app" {
+  ami                    = data.aws_ami.amazon_linux_2.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_default_subnet.subnet_az1.id
+  vpc_security_group_ids = [aws_security_group.webserver_security_group.id]
+  key_name               = var.ec2_key_name != "" ? var.ec2_key_name : null
+  user_data              = templatefile("${path.module}/ec2-user-data.sh.tpl", {
+    database_url_psycopg = local.database_url_psycopg
+    docker_image        = var.ec2_docker_image
+  })
+  user_data_replace_on_change = true
+  tags = {
+    Name = "events-scraper-app"
+  }
+}
+
+output "ec2_public_ip" {
+  description = "Public IP of the EC2 instance (SSH and run app here)"
+  value       = aws_instance.app.public_ip
+}
+
+output "ec2_ssh" {
+  description = "SSH command (uses ec2_key_name; .pem assumed in ~/.ssh/)"
+  value       = "ssh -i ~/.ssh/${var.ec2_key_name}.pem ec2-user@${aws_instance.app.public_ip}"
 }

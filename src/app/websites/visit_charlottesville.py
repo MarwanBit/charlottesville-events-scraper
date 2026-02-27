@@ -2,16 +2,13 @@ from .base import EventsWebsite
 from ..utils import clean_text
 from typing import Optional
 import requests
-from bs4 import Tag
+from bs4 import Tag, BeautifulSoup
 from urllib.parse import urljoin
 from datetime import datetime, timezone
 
 import json
 import re
-from datetime import datetime
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
-from src.app.utils import clean_text
+from ..visit_charlottesville_date_parsing import parse_event_datetime_range, _parse_time
 
 
 def get_image_url(soup: BeautifulSoup, base_url):
@@ -162,39 +159,26 @@ class VisitCharlottesvilleWebsite(EventsWebsite):
 
     def extract_event_from_card(self, card: Tag) -> list[dict]:
         title_el = card.select_one(".card__heading a")
-        date_el = card.select_one(".card__date-heading")
-        address_el = card.select_one(".card__address")
-        phone_el = card.select_one(".card__phone a")
-        website_el = card.select_one(".card__website a")
-
         event_link = ""
         if title_el and title_el.get("href"):
             event_link = urljoin("https://www.visitcharlottesville.org/events/", title_el["href"])
-
-        title = clean_text(title_el.get_text()) if title_el else ""
-        date = clean_text(date_el.get_text()) if date_el else ""
-        address = clean_text(address_el.get_text()) if address_el else ""
-        phone = clean_text(phone_el.get_text()) if phone_el else ""
-        website = urljoin(event_link, website_el.get("href", "")) if website_el else ""
-
         return {
             "event_link": event_link,
-            "title": title,
-            "date": date,
-            "address": address,
-            "phone": phone,
-            "website": website,
             "scraped_at": datetime.now(timezone.utc).isoformat()
         }
     
     def get_events(self, client: Optional[requests.Session] = None) -> list[dict]:
         if not self.soup:
             self.generate_soup(client)
+        if not self.soup:
+            return []
+        '''
         cards = self.parse_listing_cards(client)
         res = []
         for card in cards:
             res.append(self.extract_event_from_card(card))
-        return res
+        '''
+        return []
 
     def extract_links(self, client: Optional[requests.Session] = None) -> list[str]:
         if not self.soup:
@@ -225,61 +209,95 @@ class VisitCharlottesvilleEventWebsite(EventsWebsite):
     def get_events(self, client: Optional[requests.Session] = None) -> list[dict]:
         if not self.soup:
             self.generate_soup(client)
+        if not self.soup:
+            print(
+                "[VisitCharlottesvilleEventWebsite] no soup loaded for event page; returning 0 events",
+                flush=True,
+            )
+            return []
 
-        def pick_text(selectors):
-            for sel in selectors:
-                el = self.soup.select_one(sel)
-                if el and el.get_text(strip=True):
-                    return clean_text(el.get_text(" ", strip=True))
-            return ""
+        description_el = self.soup.select_one(".text__text")
+        title_el = self.soup.select_one(".page-title__heading") or self.soup.select_one(
+            "h1"
+        )
+        date_el = self.soup.select_one("p.page-title__subheading")
+        address_el = self.soup.select_one('div.detail__address')
+        phone_el = self.soup.select_one('ul.detail__info a')
+        website_el = self.soup.select_one('a.btn.dms-ext-link')
 
-        description = pick_text([".text__text"])
+        description = (
+            clean_text(description_el.get_text(" ", strip=True)) if description_el else ""
+        )
+        title = clean_text(title_el.get_text(" ", strip=True)) if title_el else ""
         image_url = get_image_url(self.soup, self.url)
         organizer = extract_contact_info(self.soup)
 
-        start_date = end_date = start_time = end_time = ""
-        ld = parse_jsonld_event(self.soup)
+        # These can be enriched later from listing context if needed.
+        address = clean_text(address_el.get_text(strip=True)) if address_el else ""
+        phone = clean_text(phone_el.get_text(strip=True)) if phone_el else ""
+        website = clean_text(website_el.get_text(strip=True)) if website_el else ""
+        scraped_at = datetime.now(timezone.utc).isoformat()
 
-        if ld:
-            sd = ld.get("startDate", "") or ""
-            ed = ld.get("endDate", "") or ""
+        date_text = clean_text(date_el.get_text(" ", strip=True)) if date_el else ""
+        if date_text:
+            ranges = parse_event_datetime_range(date_text)
+        else:
+            ranges = [(None, None, None, None)]
 
-            if sd:
-                start_date = sd[:10] if len(sd) >= 10 else ""
-                if "T" in sd:
-                    start_time = sd.split("T", 1)[1][:5]
-            if ed:
-                end_date = ed[:10] if len(ed) >= 10 else ""
-                if "T" in ed:
-                    end_time = ed.split("T", 1)[1][:5]
+        # If we still have no concrete dates, try to locate a 'Month DD'
+        # token anywhere in the page text and parse that.
+        if all(start_date is None and end_date is None for start_date, end_date, _, _ in ranges):
+            full_text_for_date = clean_text(self.soup.get_text(" ", strip=True))
+            m_date = re.search(r"\b([A-Za-z]+ \d{1,2})\b", full_text_for_date)
+            if m_date:
+                fallback_date_str = m_date.group(1)
+                ranges = parse_event_datetime_range(fallback_date_str)
 
-            if not description and isinstance(ld.get("description"), str):
-                description = clean_text(ld["description"])
+        # Fallback: if times weren't parsed from the date string, try to
+        # extract a "10am to 5:30pm" (or "10:00am to 5:00pm") pattern
+        # from the full page text and merge that into the parsed ranges.
+        if any(start_time is None or end_time is None for _, _, start_time, end_time in ranges):
+            full_text = clean_text(self.soup.get_text(" ", strip=True))
+            m = re.search(
+                r"(\d{1,2}(?::\d{2})?\s*[ap]m)\s+to\s+(\d{1,2}(?::\d{2})?\s*[ap]m)",
+                full_text,
+                flags=re.IGNORECASE,
+            )
+            if m:
+                t1_raw, t2_raw = m.groups()
+                t1 = _parse_time(t1_raw)
+                t2 = _parse_time(t2_raw)
+                if t1 and t2:
+                    new_ranges = []
+                    for sd, ed, st, et in ranges:
+                        if st is None:
+                            st = t1
+                        if et is None:
+                            et = t2
+                        new_ranges.append((sd, ed, st, et))
+                    ranges = new_ranges
 
-            if not image_url:
-                img = ld.get("image")
-                if isinstance(img, str):
-                    image_url = urljoin(self.url, img)
-                elif isinstance(img, list) and img and isinstance(img[0], str):
-                    image_url = urljoin(self.url, img[0])
+        events: list[dict] = []
+        for start_date, end_date, start_time, end_time in ranges:
+            events.append(
+                {
+                    "title": title,
+                    "event_link": self.url,
+                    "description": description,
+                    "image_url": image_url,
+                    "organizer": organizer,
+                    "address": address,
+                    "scraped_at": scraped_at,
+                    "website": website,
+                    "phone": phone,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }
+            )
 
-        if not start_date or not end_date:
-            sd2, ed2, st2, et2 = parse_subheading_to_dates_times(self.soup)
-            start_date = start_date or sd2
-            end_date = end_date or ed2
-            start_time = start_time or st2
-            end_time = end_time or et2
-
-        return [{
-            "event_link": self.url,
-            "description": description,
-            "image_url": image_url,
-            "organizer": organizer,
-            "start_date": start_date,
-            "end_date": end_date,
-            "start_time": start_time,
-            "end_time": end_time,
-        }]
+        return events
 
     def extract_links(self, client: Optional[requests.Session] = None) -> list[str]:
         return [] 

@@ -29,3 +29,10 @@ htmlcov/
 
 # Docker volumes
 *.db
+
+# Terraform (keep tfvars local so key names/secrets aren't committed)
+terraform.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan

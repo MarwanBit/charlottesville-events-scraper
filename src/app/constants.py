@@ -4,6 +4,7 @@ DB_FIELDS = {
     "day_of_week", "is_weekend", "time_of_day",
     "event_category", "audience", "location_type",
     "address", "organizer", "phone", "website", "image_url", "description",
+    "latitude", "longitude", "email", "cost", "contact",
     "scraped_at"
 }
 
