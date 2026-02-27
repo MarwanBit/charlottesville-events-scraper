@@ -11,3 +11,5 @@ def test_client_can_fetch_events_page(client):
     assert "<html" in r.text.lower()
     # Keep the text check flexible (site content can change)
     assert "events" in r.text.lower()
+
+

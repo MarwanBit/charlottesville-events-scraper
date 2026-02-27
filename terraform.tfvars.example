@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars and set your values.
+# terraform.tfvars is loaded automatically by Terraform.
+
+# Name of your EC2 key pair in AWS (us-east-1). Create under EC2 → Key pairs.
+ec2_key_name = "busco-events-scraper-key"

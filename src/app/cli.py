@@ -1,9 +1,12 @@
-from app.client import create_session
-from app.pipeline import run_pipeline
+"""CLI entrypoint. Run from project root as: python -m src.app.cli  or  python -m src.app"""
+from .pipeline import PostgreSQLPipeline
+
 
 def main():
-    session = create_session()
-    run_pipeline(session)
+    """Run the pipeline. Uses session_scope() for a single DB connection that is closed on exit."""
+    pipeline = PostgreSQLPipeline()
+    pipeline.run()
+
 
 if __name__ == "__main__":
     main()

@@ -1,77 +1,150 @@
-from datetime import datetime, timezone
-from app.listing_parser import parse_listing_cards, extract_event_from_card
-from app.detail_scraper import scrape_event_detail
-from app.transformer import categorize_event, add_date_time_features
-from app.repository import Repository
-from app.excel_exporter import export_to_excel
-from app.crawler import iter_listing_pages
-from app.config import EXCEL_OUTPUT
+from abc import ABC, abstractmethod
+import time
 
-def run_pipeline(session):
-    repo = Repository()
-    all_events = []
-    total_new = 0
+from .dumper import PostgreSQLDumper
+from .models import connection_scope
+from .url_queue import PostgreSQLURLQueue
+from .url_resolver import URLResolver
+from .http_client import HybridClient
+from .repository import Repository
+from .transformer import Transformer
+import pprint
 
-    try:
-        for page, html, cards_count in iter_listing_pages(session):
-            _, cards = parse_listing_cards(html)
-            new_count = 0
 
-            for card in cards:
-                base = extract_event_from_card(card)
-                event_link = base.get("event_link", "")
-                title = base.get("title", "")
+def _dedupe_events_by_link(events: list[dict]) -> list[dict]:
+    """Merge duplicate events that share the same event_link (e.g. recurring listings).
+    Keeps one record per event_link with the earliest start_date and latest end_date."""
+    by_link: dict[str, list[dict]] = {}
+    for e in events:
+        link = e.get("event_link") or ""
+        by_link.setdefault(link, []).append(e)
+    out = []
+    for link, group in by_link.items():
+        if not group:
+            continue
+        base = dict(group[0])
+        if len(group) == 1:
+            out.append(base)
+            continue
+        start_dates = [e.get("start_date") for e in group if e.get("start_date")]
+        end_dates = [e.get("end_date") for e in group if e.get("end_date")]
+        if start_dates:
+            base["start_date"] = min(start_dates)
+        if end_dates:
+            base["end_date"] = max(end_dates)
+        out.append(base)
+    return out
 
-                if not title or not event_link:
-                    continue
 
-                if repo.is_processed(event_link):
-                    continue
+class BasePipeline(ABC):
 
-                event = {
-                    **base,
-                    "scraped_at": datetime.now(timezone.utc).isoformat(),
-                }
+    def __init__(self, client, queue, url_resolver, transformer, dumper):
+        self.client = client
+        self.queue = queue
+        self.url_resolver = url_resolver
+        self.transformer = transformer
+        self.dumper = dumper
 
-                try:
-                    details = scrape_event_detail(session, event_link)
-                    event.update(details)
+    @abstractmethod
+    def run(self):
+        pass
 
-                    event.update(categorize_event(
-                        title=event.get("title", ""),
-                        description=event.get("description", ""),
-                        address=event.get("address", ""),
-                        organizer=event.get("organizer", ""),
-                    ))
+# Pipeline uses connection_scope(): one connection for the whole run, session bound to it.
+class PostgreSQLPipeline(BasePipeline):
 
-                    event.update(add_date_time_features(
-                        start_date=event.get("start_date", ""),
-                        start_time=event.get("start_time", ""),
-                    ))
+    def __init__(self):
+        self._queue = None
+        self._client = None
+        self._url_resolver = None
+        self._dumper = None
+        self._transformer = None
 
-                    all_events.append(event)
-                    repo.upsert_event(event)
-                    repo.mark_processed(event_link)
-                    repo.commit()
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = HybridClient()
+        return self._client
 
-                    new_count += 1
-                    total_new += 1
+    @property
+    def url_resolver(self):
+        if self._url_resolver is None:
+            self._url_resolver = URLResolver()
+        return self._url_resolver
 
-                    print(f"\n📄 Scraping LISTING page {page} ...")
-                    print(f"  ▶ Event: {title}")
+    @property
+    def transformer(self):
+        if self._transformer is None:
+            self._transformer = Transformer()
+        return self._transformer
 
-                except Exception as e:
-                    repo.rollback()
-                    print("Detail scrape failed:", event_link, e)
+    def run(self):
+        print("Connecting to database...", flush=True)
+        with connection_scope() as session:
+            print("Connected. Initializing queue...", flush=True)
+            self._queue = PostgreSQLURLQueue(session=session)
+            self._dumper = PostgreSQLDumper(session=session)
+            repository = Repository(session=session)
+            try:
+                self._queue.init_queue()
+                print("Queue ready. Processing URLs...", flush=True)
+                processed = 0
+                while not self._queue.empty():
+                    url = self._queue.pop()
+                    processed += 1
+                    print(f"[PIPELINE] URL #{processed}: {url}", flush=True)
+                    time.sleep(1)
+                    website = self.url_resolver.resolve(url)
+                    
 
-            # optional log
-            if cards_count:
-                print(f"Page {page}: cards={cards_count}, new={new_count}")
+                    # add external links/new sites to visit
+                    external_links = list(website.extract_links(self.client))
+                    for external_site in external_links:
+                        self._queue.enqueue(external_site)
+                    print(f"[PIPELINE]   discovered {len(external_links)} new URLs to enqueue", flush=True)
+                    # now we need to extract the links from it
+                    events = website.get_events(self.client)
+                    # pprint.pprint(events)
+                    print(f"[PIPELINE]   scraped {len(events)} raw events", flush=True)
+                    website_type = type(website).__name__
+                    if website_type not in ("ExploreGeorgiaEventWebsite", "VisitCharlottesvilleEventWebsite", "WashingtonEventWebsite", "VisitMAEventWebsite", "EnjoyIllinoisEventWebsite"):
+                        before = len(events)
+                        events = _dedupe_events_by_link(events)
+                        print(f"[PIPELINE]   deduped events: {before} -> {len(events)}", flush=True)
+                    else:
+                        print(f"[PIPELINE]   {website_type}: keeping {len(events)} events (no dedupe)", flush=True)
+                    # dump the information to the DB, then transform it and reinsert it
+                    self._dumper.dump_events(events)
+                    # extract information from the DB
+                    for event in events:
+                        event_link = event["event_link"]
+                        existing = repository.get_event_by_unique_key(
+                            event_link,
+                            event.get("start_date"),
+                            event.get("end_date"),
+                            event.get("start_time"),
+                            event.get("end_time"),
+                        )
+                        merged = {**(existing or {}), **event}
+                        transformed_event = self.transformer.transform_event(merged)
+                        self._dumper.upsert_event(transformed_event)
+                    self._dumper.commit()
+                    print(f"[PIPELINE]   committed {len(events)} events", flush=True)
 
-        export_to_excel(all_events, EXCEL_OUTPUT)
-        print("\nDone ✅")
-        print(f"Excel saved ✅ {EXCEL_OUTPUT}")
-        return total_new
+                    # now we mark them as visited
+                    self._queue.mark_complete(website.url)
+                    print(f"[PIPELINE] done with URL #{processed}: {website}", flush=True)
+            finally:
+                if self._client is not None:
+                    try:
+                        self._client.close()
+                    except Exception:
+                        pass
+                if self._dumper is not None:
+                    self._dumper.close()
+                if self._queue is not None:
+                    self._queue.close()
 
-    finally:
-        repo.close()
+
+if __name__ == "__main__":
+    pipeline = PostgreSQLPipeline()
+    pipeline.run()

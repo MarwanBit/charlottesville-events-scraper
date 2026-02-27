@@ -4,6 +4,7 @@ DB_FIELDS = {
     "day_of_week", "is_weekend", "time_of_day",
     "event_category", "audience", "location_type",
     "address", "organizer", "phone", "website", "image_url", "description",
+    "latitude", "longitude", "email", "cost", "contact",
     "scraped_at"
 }
 
@@ -30,4 +31,13 @@ LOCATION_TYPE_RULES = [
     ("Park/Outdoor", ["park", "garden", "trail", "outdoor"]),
     ("Hotel", ["hotel", "inn"]),
     ("Community Center", ["community center", "center", "library"]),
+]
+
+INITIAL_URLS = [
+    'https://www.visitcharlottesville.org/events/',
+    'https://washington.org/find-dc-listings/events',
+    'https://www.visitma.com/events',
+    'https://exploregeorgia.org/calendar-of-events',
+    'https://www.enjoyillinois.com/things-to-do/festivals-and-events/',
+    'https://texastimetravel.com/events/',
 ]
