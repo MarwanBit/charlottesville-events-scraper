@@ -27,6 +27,22 @@ def _normalize_time_for_key(t):
         return t.isoformat()  # time
     return str(t)
 
+
+def _coerce_optional_float(value):
+    """Float DB columns reject ''; treat blanks and bad strings as NULL."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        return float(s)
+    except ValueError:
+        return None
+
+
 class Repository:
     """Requires session= from session_scope() or get_session()."""
 
@@ -57,10 +73,13 @@ class Repository:
             db_event["start_date"] = _normalize_date_for_key(db_event["start_date"])
         if db_event.get("end_date") is not None and hasattr(db_event["end_date"], "isoformat"):
             db_event["end_date"] = _normalize_date_for_key(db_event["end_date"])
-        if db_event.get("start_time") is not None and hasattr(db_event["start_time"], "isoformat"):
-            db_event["start_time"] = _normalize_time_for_key(db_event["start_time"])
-        if db_event.get("end_time") is not None and hasattr(db_event["end_time"], "isoformat"):
-            db_event["end_time"] = _normalize_time_for_key(db_event["end_time"])
+        for tk in ("start_time", "end_time"):
+            if tk in db_event:
+                db_event[tk] = _normalize_time_for_key(db_event.get(tk))
+
+        for fk in ("latitude", "longitude", "cost"):
+            if fk in db_event:
+                db_event[fk] = _coerce_optional_float(db_event.get(fk))
 
         existing = self.db.query(EventRecord).filter_by(
             event_link=event_link,

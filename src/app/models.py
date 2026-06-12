@@ -146,10 +146,12 @@ class EventRecord(Base):
     time_of_day: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     event_category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secondary_category: Mapped[str | None] = mapped_column(Text, nullable=True)
     audience: Mapped[str | None] = mapped_column(Text, nullable=True)
     location_type: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     organizer: Mapped[str | None] = mapped_column(Text, nullable=True)
     phone: Mapped[str | None] = mapped_column(Text, nullable=True)
     website: Mapped[str | None] = mapped_column(Text, nullable=True)
