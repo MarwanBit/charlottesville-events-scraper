@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import os
 import time
 
 from .dumper import PostgreSQLDumper
@@ -92,7 +93,12 @@ class PostgreSQLPipeline(BasePipeline):
                     url = self._queue.pop()
                     processed += 1
                     print(f"[PIPELINE] URL #{processed}: {url}", flush=True)
-                    time.sleep(1)
+                    try:
+                        delay = float(os.environ.get("PIPELINE_URL_DELAY_SEC", "3"))
+                    except ValueError:
+                        delay = 3.0
+                    if delay > 0:
+                        time.sleep(delay)
                     website = self.url_resolver.resolve(url)
                     
 
@@ -106,7 +112,13 @@ class PostgreSQLPipeline(BasePipeline):
                     # pprint.pprint(events)
                     print(f"[PIPELINE]   scraped {len(events)} raw events", flush=True)
                     website_type = type(website).__name__
-                    if website_type not in ("ExploreGeorgiaEventWebsite", "VisitCharlottesvilleEventWebsite", "WashingtonEventWebsite", "VisitMAEventWebsite", "EnjoyIllinoisEventWebsite"):
+                    if website_type not in (
+                        "ExploreGeorgiaEventWebsite", "VisitCharlottesvilleEventWebsite", 
+                        "WashingtonEventWebsite", "VisitMAEventWebsite", 
+                        "EnjoyIllinoisEventWebsite", "IndieShortFilmFestivalEventWebsite", 
+                        "TomTomFestivalEventWebsite", "CvilleRightNowEventWebsite",
+                        "CharlottesvilleEventbriteEventWebsite",
+                        ):
                         before = len(events)
                         events = _dedupe_events_by_link(events)
                         print(f"[PIPELINE]   deduped events: {before} -> {len(events)}", flush=True)

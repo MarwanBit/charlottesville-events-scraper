@@ -46,7 +46,7 @@ def test_excel_dumper_roundtrip(tmp_path):
         {
             "title": "Test Event Two",
             "start_date": "2025-04-01",
-            "event_category": "Food",
+            "event_category": "Food & Drink",
             "organizer": "Local Org",
         },
     ]

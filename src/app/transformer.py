@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .constants import EVENT_TYPE_RULES, LOCATION_TYPE_RULES
+from .constants import EVENT_TYPE_RULES, LOCATION_TYPE_RULES, normalize_primary_category
 from datetime import datetime, date, time
 import re
 
@@ -12,8 +12,24 @@ class BaseTransformer(ABC):
 class Transformer(BaseTransformer):
 
     def _contains_any(self, text: str, keywords: list[str]) -> bool:
+        """
+        Word-boundary aware matching to reduce false positives.
+
+        The previous implementation used substring matching, which caused
+        issues like keyword "pub" matching "Public".
+        """
         t = (text or "").lower()
-        return any(k in t for k in keywords)
+        for k in keywords:
+            kw = (k or "").strip().lower()
+            if not kw:
+                continue
+            # Apply word boundaries only when the keyword starts/ends with an alphanumeric char.
+            start_b = r"\b" if (kw[0].isalnum()) else ""
+            end_b = r"\b" if (kw[-1].isalnum()) else ""
+            pattern = f"{start_b}{re.escape(kw)}{end_b}"
+            if re.search(pattern, t, flags=re.IGNORECASE):
+                return True
+        return False
 
     def categorize_event(self, title: str, description: str, address: str, organizer: str) -> dict:
         blob = " ".join([title or "", description or "", address or "", organizer or ""]).lower()
@@ -37,7 +53,11 @@ class Transformer(BaseTransformer):
                 location_type = loc
                 break
 
-        return {"event_category": event_category, "audience": audience, "location_type": location_type}
+        return {
+            "event_category": normalize_primary_category(event_category),
+            "audience": audience,
+            "location_type": location_type,
+        }
 
     def add_date_time_features(self, start_date: str, start_time: str):
         day_of_week = ""

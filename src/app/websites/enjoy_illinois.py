@@ -278,7 +278,7 @@ class EnjoyIllinoisEventWebsite(EventsWebsite):
 
         # Keep simple image selection for now (can be upgraded with srcset if needed).
         image_el = self.soup.select_one('img')
-        image_url = clean_text(image_el.get('src')) if image_el and image_el.get('src') else ""
+        image_url = self.BASE_URL + clean_text(image_el.get('src')) if image_el and image_el.get('src') else ""
 
         title = clean_text(title_el.get_text(strip=True)) if title_el else ""
         organizer = None

@@ -3,12 +3,15 @@ from abc import ABC, abstractmethod
 from .utils import val
 from .config import MISSING
 from .constants import DB_FIELDS
-from .repository import _normalize_date_for_key, _normalize_time_for_key
+from .repository import (
+    _coerce_optional_float,
+    _normalize_date_for_key,
+    _normalize_time_for_key,
+)
 
 from sqlalchemy.orm.session import Session
 
 from .models import ProcessedURL, EventRecord
-
 
 
 class BaseDumper(ABC):
@@ -102,10 +105,14 @@ class PostgreSQLDumper(BaseDumper):
             db_event["start_date"] = _normalize_date_for_key(db_event["start_date"])
         if db_event.get("end_date") is not None and hasattr(db_event["end_date"], "isoformat"):
             db_event["end_date"] = _normalize_date_for_key(db_event["end_date"])
-        if db_event.get("start_time") is not None and hasattr(db_event["start_time"], "isoformat"):
-            db_event["start_time"] = _normalize_time_for_key(db_event["start_time"])
-        if db_event.get("end_time") is not None and hasattr(db_event["end_time"], "isoformat"):
-            db_event["end_time"] = _normalize_time_for_key(db_event["end_time"])
+        # Must match lookup keys: '' was stored as empty string while filter_by used NULL → duplicate inserts.
+        for tk in ("start_time", "end_time"):
+            if tk in db_event:
+                db_event[tk] = _normalize_time_for_key(db_event.get(tk))
+
+        for fk in ("latitude", "longitude", "cost"):
+            if fk in db_event:
+                db_event[fk] = _coerce_optional_float(db_event.get(fk))
 
         existing = self.db.query(EventRecord).filter_by(
             event_link=event_link,

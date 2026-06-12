@@ -1,5 +1,3 @@
-from src.app.http_client import NoDriverClient
-
 from src.app.websites import WashingtonWebsite, WashingtonEventWebsite
 from src.app.websites import VisitCharlottesvilleWebsite
 from src.app.websites import DiscoverDurhamWebsite
@@ -8,11 +6,14 @@ from src.app.websites import VisitMAWebsite, VisitMAEventWebsite
 from src.app.websites import ExploreGeorgiaWebsite, ExploreGeorgiaEventWebsite
 from src.app.websites import EnjoyIllinoisWebsite, EnjoyIllinoisEventWebsite
 from src.app.websites import TexasTimeTravelWebsite, TexasTimeTravelEventWebsite
+from src.app.websites import ILoveNYWebsite, ILoveNYEventWebsite
 
 from src.app.url_resolver import UnknownWebsiteError
 
 import pytest
 import pprint
+
+from src.app.websites.i_love_ny import ILoveNYWebsite
 
 def test_visit_charlottesville(resolver):
     event1_url = 'https://www.discoverdurham.com/events/?page=2'
@@ -59,6 +60,7 @@ def test_washington_event(resolver, client):
 def visit_ma_client():
     """One NoDriverClient for all VisitMA tests in this module; skip if browser cannot start.
     Client is closed once after all Visit MA tests finish (do not close it inside each test)."""
+    from src.app.http_client import NoDriverClient
     try:
         client = NoDriverClient.create_sync()
         yield client
@@ -191,6 +193,45 @@ def test_texas_time_travel_events_page(resolver, client):
     assert str(website_1) == f"TexasTimeTravelEventWebsite w/ URL: {event1_url}"
     events = website_1.get_events(client)
     pprint.pprint(events)
+
+def test_i_love_ny_page(resolver):
+    event1_url = 'https://www.iloveny.com/events/'
+    event2_url = 'https://www.iloveny.com/events/?skip=12&startDate=03%2F05%2F2026&endDate=04%2F03%2F2026&sort=date'
+    website_1 = resolver.resolve(event1_url)
+    website_2 = resolver.resolve(event2_url)
+    assert isinstance(website_1, ILoveNYWebsite)
+    assert isinstance(website_2, ILoveNYWebsite)
+    assert str(website_1) == f"ILoveNYWebsite w/ URL: {event1_url}"
+    assert str(website_2) == f"ILoveNYWebsite w/ URL: {event2_url}"
+
+def test_i_love_ny_events_page(resolver):
+    event1_url = 'https://www.iloveny.com/event/first-friday-art-walk/60411/'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, ILoveNYEventWebsite)
+    assert str(website_1) == f'ILoveNYEventWebsite w/ URL: {event1_url}'
+
+def test_i_love_ny_page_2(resolver, visit_ma_client):
+    """I Love NY events list is JS-rendered; requires NoDriverClient and wait_for_selector."""
+    client = visit_ma_client
+    event1_url = 'https://www.iloveny.com/events/'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, ILoveNYWebsite)
+    assert str(website_1) == f"ILoveNYWebsite w/ URL: {event1_url}"
+    links = website_1.extract_links(client)
+    pprint.pprint(links)
+    assert len(links) >= 1, f"expected at least 1 link (event or next page), got {len(links)}"
+
+def test_i_love_ny_events_page_extraction(resolver, visit_ma_client):
+    '''I Love NY particular events page, testing extraction'''
+    client = visit_ma_client
+    event1_url = 'https://www.iloveny.com/event/burnout-paradise/tm_vv1adzkuegkdwbxm_/'
+    website_1 = resolver.resolve(event1_url)
+    assert isinstance(website_1, ILoveNYEventWebsite)
+    assert str(website_1) == f"ILoveNYEventWebsite w/ URL: {event1_url}"
+    events = website_1.get_events(client)
+    pprint.pprint(events)
+    assert len(events) == 1
+    
 
 def test_matching_error(resolver):
     with pytest.raises(UnknownWebsiteError):
